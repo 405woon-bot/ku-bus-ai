@@ -1,0 +1,551 @@
+{
+ "invalidCode": null,
+ "lectureRoms": {
+  "empty": false,
+  "results": [
+   {
+    "appcsLmttPcnt": 40,
+    "appointPriorSubject": false,
+    "assignedCollegeCode": "",
+    "assignedDepartmentCode": "20639",
+    "basketAttendCount": -1,
+    "categoryCode": "02",
+    "classSequence": "01",
+    "closed": false,
+    "courseCode": "00",
+    "credits": {
+     "credit": 3,
+     "practiceTime": 0,
+     "theoryTime": 3
+    },
+    "dayTime": "Day",
+    "displayLangCode": "ko",
+    "entityVersion": 0,
+    "foreignLanguage": false,
+    "full": false,
+    "grades": {
+     "elements": [
+      "2"
+     ]
+    },
+    "id": "2026-20-0066305-01-ko",
+    "langCode": null,
+    "professorName": "김교수",
+    "professorNo": "0000000",
+    "remark": "",
+    "retake": null,
+    "schedule": {
+     "lectureTimes": [
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "MONDAY",
+       "end": {
+        "hour": 15,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1500",
+       "minutes": 30,
+       "start": {
+        "hour": 15,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "MONDAY",
+       "end": {
+        "hour": 16,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1530",
+       "minutes": 30,
+       "start": {
+        "hour": 15,
+        "minute": 30
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "MONDAY",
+       "end": {
+        "hour": 16,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1600",
+       "minutes": 30,
+       "start": {
+        "hour": 16,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "THURSDAY",
+       "end": {
+        "hour": 17,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1630",
+       "minutes": 30,
+       "start": {
+        "hour": 16,
+        "minute": 30
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "THURSDAY",
+       "end": {
+        "hour": 17,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1700",
+       "minutes": 30,
+       "start": {
+        "hour": 17,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "미래관3층38호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "THURSDAY",
+       "end": {
+        "hour": 18,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1730",
+       "minutes": 30,
+       "start": {
+        "hour": 17,
+        "minute": 30
+       }
+      }
+     ]
+    },
+    "semesterCode": "20",
+    "sequenceNo": null,
+    "standardDeptCode": "20000",
+    "strGrade": "2",
+    "studentTypeRule": null,
+    "subjectId": "0066305",
+    "subjectNm": "회로이론II",
+    "teamTeamDual": false,
+    "tiedLectureIds": null,
+    "type": "Normal",
+    "year": "2026"
+   },
+   {
+    "appcsLmttPcnt": 40,
+    "appointPriorSubject": false,
+    "assignedCollegeCode": "",
+    "assignedDepartmentCode": "20640",
+    "basketAttendCount": -1,
+    "categoryCode": "01",
+    "classSequence": "02",
+    "closed": false,
+    "courseCode": "00",
+    "credits": {
+     "credit": 3,
+     "practiceTime": 0,
+     "theoryTime": 3
+    },
+    "dayTime": "Night",
+    "displayLangCode": "ko",
+    "entityVersion": 0,
+    "foreignLanguage": false,
+    "full": false,
+    "grades": {
+     "elements": [
+      "3"
+     ]
+    },
+    "id": "2026-20-0123456-02-ko",
+    "langCode": null,
+    "professorName": "박교수",
+    "professorNo": "0000000",
+    "remark": "",
+    "retake": null,
+    "schedule": {
+     "lectureTimes": [
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 18,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1800",
+       "minutes": 30,
+       "start": {
+        "hour": 18,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 19,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1830",
+       "minutes": 30,
+       "start": {
+        "hour": 18,
+        "minute": 30
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 19,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1900",
+       "minutes": 30,
+       "start": {
+        "hour": 19,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 20,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1930",
+       "minutes": 30,
+       "start": {
+        "hour": 19,
+        "minute": 30
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 20,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "2000",
+       "minutes": 30,
+       "start": {
+        "hour": 20,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "공학관4층01호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "TUESDAY",
+       "end": {
+        "hour": 21,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "2030",
+       "minutes": 30,
+       "start": {
+        "hour": 20,
+        "minute": 30
+       }
+      }
+     ]
+    },
+    "semesterCode": "20",
+    "sequenceNo": null,
+    "standardDeptCode": "20000",
+    "strGrade": "3",
+    "studentTypeRule": null,
+    "subjectId": "0123456",
+    "subjectNm": "데이터베이스",
+    "teamTeamDual": false,
+    "tiedLectureIds": null,
+    "type": "Normal",
+    "year": "2026"
+   },
+   {
+    "appcsLmttPcnt": 40,
+    "appointPriorSubject": false,
+    "assignedCollegeCode": "",
+    "assignedDepartmentCode": "20428",
+    "basketAttendCount": -1,
+    "categoryCode": "04",
+    "classSequence": "01",
+    "closed": false,
+    "courseCode": "00",
+    "credits": {
+     "credit": 2,
+     "practiceTime": 0,
+     "theoryTime": 2
+    },
+    "dayTime": "Day",
+    "displayLangCode": "ko",
+    "entityVersion": 0,
+    "foreignLanguage": false,
+    "full": false,
+    "grades": {
+     "elements": [
+      "1"
+     ]
+    },
+    "id": "2026-20-0234567-01-ko",
+    "langCode": null,
+    "professorName": "이교수",
+    "professorNo": "0000000",
+    "remark": "",
+    "retake": null,
+    "schedule": {
+     "lectureTimes": [
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "북악관6층09호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "SATURDAY",
+       "end": {
+        "hour": 10,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1000",
+       "minutes": 30,
+       "start": {
+        "hour": 10,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "북악관6층09호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "SATURDAY",
+       "end": {
+        "hour": 11,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1030",
+       "minutes": 30,
+       "start": {
+        "hour": 10,
+        "minute": 30
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "북악관6층09호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "SATURDAY",
+       "end": {
+        "hour": 11,
+        "minute": 30
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1100",
+       "minutes": 30,
+       "start": {
+        "hour": 11,
+        "minute": 0
+       }
+      },
+      {
+       "classRoomCode": "13F03043",
+       "classRoomName": "북악관6층09호실",
+       "datePeriod": {
+        "endDate": "1900-01-01",
+        "startDate": "1900-01-01",
+        "valid": false,
+        "zoneId": "GMT+09:00"
+       },
+       "dayOfWeek": "SATURDAY",
+       "end": {
+        "hour": 12,
+        "minute": 0
+       },
+       "instructorId": "0000000",
+       "lectureTimeCd": "1130",
+       "minutes": 30,
+       "start": {
+        "hour": 11,
+        "minute": 30
+       }
+      }
+     ]
+    },
+    "semesterCode": "20",
+    "sequenceNo": null,
+    "standardDeptCode": "20000",
+    "strGrade": "1",
+    "studentTypeRule": null,
+    "subjectId": "0234567",
+    "subjectNm": "현대사회와윤리",
+    "teamTeamDual": false,
+    "tiedLectureIds": null,
+    "type": "Normal",
+    "year": "2026"
+   },
+   {
+    "appcsLmttPcnt": 40,
+    "appointPriorSubject": false,
+    "assignedCollegeCode": "",
+    "assignedDepartmentCode": "20428",
+    "basketAttendCount": -1,
+    "categoryCode": "04",
+    "classSequence": "01",
+    "closed": false,
+    "courseCode": "00",
+    "credits": {
+     "credit": 3,
+     "practiceTime": 0,
+     "theoryTime": 3
+    },
+    "dayTime": "Day",
+    "displayLangCode": "ko",
+    "entityVersion": 0,
+    "foreignLanguage": false,
+    "full": false,
+    "grades": {
+     "elements": [
+      "1"
+     ]
+    },
+    "id": "2026-20-0345678-01-ko",
+    "langCode": null,
+    "professorName": "정교수",
+    "professorNo": "0000000",
+    "remark": "온라인 강의",
+    "retake": null,
+    "schedule": {
+     "lectureTimes": []
+    },
+    "semesterCode": "20",
+    "sequenceNo": null,
+    "standardDeptCode": "20000",
+    "strGrade": "1",
+    "studentTypeRule": null,
+    "subjectId": "0345678",
+    "subjectNm": "원격강좌 예시",
+    "teamTeamDual": false,
+    "tiedLectureIds": null,
+    "type": "Normal",
+    "year": "2026"
+   }
+  ],
+  "totalCount": 4
+ },
+ "prohibitType": "NONE",
+ "searchCount": null,
+ "warningMessage": null
+}

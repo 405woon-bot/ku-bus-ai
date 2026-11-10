@@ -9,6 +9,7 @@ import { useServerSync } from './hooks/useServerSync.js';
 import { notifyPermission, requestNotifyPermission } from './lib/platform.js';
 import { api, enableServerPush } from './lib/api.js';
 import { colorIndexFor } from './lib/palette.js';
+import { courseToClasses } from '@shared/courses.js';
 import { Header, PreviewBar, TabBar, TABS } from './components/AppShell.jsx';
 import HomeScreen from './components/HomeScreen.jsx';
 import TimetableScreen from './components/TimetableScreen.jsx';
@@ -106,13 +107,20 @@ export default function App() {
       <Header tab={tab} onTab={go} now={now} />
       {MODE === 'sample' && <PreviewBar preview={state.preview} dispatch={dispatch} />}
 
-      <main className="gutter mx-auto max-w-[960px] pb-[calc(96px+env(safe-area-inset-bottom,0px))] pt-4 short:pt-3 md:pb-14 md:pt-8">
+      <main className={`gutter mx-auto pb-[calc(96px+env(safe-area-inset-bottom,0px))] pt-4 short:pt-3 md:pb-14 md:pt-8 ${tab === 'timetable' ? 'max-w-[1160px]' : 'max-w-[960px]'}`}>
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             onPickStop={() => setDialog({ type: 'stop' })} onSelectStop={setStop} onGoTimetable={() => go('timetable')} />
         )}
         {tab === 'timetable' && (
-          <TimetableScreen classes={state.classes} sample={state.sampleTimetable} now={now} highlightId={todayClass?.id} onOpen={setDialog} />
+          <TimetableScreen mode={MODE} classes={state.classes} sample={state.sampleTimetable} now={now} highlightId={todayClass?.id} onOpen={setDialog}
+            onAddCourse={(course, removeIds = []) => {
+              const kept = state.classes.filter((c) => !removeIds.includes(c.id));
+              const items = courseToClasses(course, { color: colorIndexFor(course.name, kept) });
+              dispatch(removeIds.length ? { type: 'swapClasses', removeIds, items } : { type: 'addClasses', items });
+            }}
+            onRemoveCourse={(courseId) => dispatch({ type: 'deleteCourse', courseId })}
+            onRestoreClasses={(classes) => dispatch({ type: 'restoreClasses', classes })} />
         )}
         {tab === 'settings' && (
           <SettingsScreen mode={MODE} state={state} dispatch={dispatch} onPickStop={() => setDialog({ type: 'stop' })}

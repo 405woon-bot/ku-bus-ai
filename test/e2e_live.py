@@ -74,6 +74,22 @@ with sync_playwright() as p:
     pg.wait_for_selector('text=서버 푸시 켜짐(synced)', timeout=10000)
     check('서버 푸시 켜기 → synced + 서버에 구독 1개', api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1)
     pg.screenshot(path=str(OUT / 'live_desktop_settings.png'), full_page=True)
+
+    # 시간표: 수업 검색(서버 /api/courses) → 추가 → 서버에 강의 묶음 번호와 함께 저장
+    pg.get_by_role('link', name='시간표').first.click()
+    search = pg.locator('section[aria-label="수업 검색"] input[type="search"]'); search.wait_for(timeout=5000)
+    check('수업 검색: 강의 목록 정보(학기·개수)', '2026년 2학기 강의' in pg.locator('[data-testid="course-meta"]').inner_text())
+    search.fill('회로이론')
+    row = pg.locator('[data-testid="course-row"]').filter(has_text='회로이론II').filter(has_text='04분반').first
+    row.get_by_role('button', name='추가').click(timeout=8000)
+    pg.wait_for_selector('[data-block]:has-text("회로이론II")', timeout=5000)
+    saved = []
+    for _ in range(30):
+        saved = [c for c in api(ctx, 8801, uid, 'GET', '/api/me')['classes'] if c.get('courseId')]
+        if saved: break
+        pg.wait_for_timeout(100)
+    check('수업 검색으로 추가 → 서버에 저장(요일·시간·강의실·묶음 번호)', [(c['name'], c['day'], c['start'], c['end'], c['building'], c['room']) for c in saved] == [('회로이론II', 4, '09:00', '12:00', '미래관', '337')], str(saved))
+    pg.screenshot(path=str(OUT / 'live_desktop_timetable.png'))
     check('페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
 
@@ -109,6 +125,10 @@ with sync_playwright() as p:
     pg.get_by_role('link', name='설정').first.click()
     pg.get_by_role('button', name='서버 푸시 켜기').wait_for(timeout=5000)
     check('키 없음: 서버 푸시 키(VAPID) 없음 안내', pg.get_by_text('VAPID').count() >= 1)
+    pg.get_by_role('link', name='시간표').first.click()
+    pg.locator('section[aria-label="수업 검색"] input[type="search"]').fill('회로')
+    pg.wait_for_selector('text=fetch_courses.py', timeout=5000)
+    check('강의 목록이 없는 서버: 수업 검색 안내(fetch_courses.py)', '강의 목록이 아직 없어요' in pg.locator('[data-testid="course-meta"]').inner_text())
     check('키 없음: 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close(); b.close()
 

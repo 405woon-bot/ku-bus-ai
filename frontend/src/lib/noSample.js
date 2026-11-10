@@ -4,3 +4,5 @@ export const SAMPLE_START_MIN = 0;
 export const SAMPLE_WEEKDAY = 0;
 export const sampleSearch = () => [];
 export const sampleTrips = () => [];
+export const SAMPLE_COURSE_META = null;
+export const searchSampleCourses = () => [];

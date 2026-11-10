@@ -1,7 +1,8 @@
-# KU BUS AI v0.4 — 탑승 정류장 하나로 끝나는 등교 출발 알림 (서울시 실시간)
+# KU BUS AI v0.5 — 탑승 정류장 하나로 끝나는 등교 출발 알림 (서울시 실시간 · 수업 검색 시간표)
 
 앱을 열면 계산 과정 없이 **"몇 시에 나가서 몇 번 버스를 타야 늦지 않는지"** 만 보여 줍니다.
-v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)에 v0.3의 서울시 실시간 연동(검증한 응답 해석 · 캐시 · 예시 데이터 전환 · 출처 배지 · 서버 푸시)을 합쳤습니다.
+v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)에 v0.3의 서울시 실시간 연동(검증한 응답 해석 · 캐시 · 예시 데이터 전환 · 출처 배지 · 서버 푸시)을 합쳤고,
+v0.5는 시간표 탭에 **수업 검색으로 자동 등록**(수강신청 사이트 공개 강좌조회 → `courses.json`)을 더했습니다.
 
 - **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY`. 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
 - **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을 바꿔 볼 수 있습니다.
@@ -10,6 +11,16 @@ v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)�
 > **인증키는 서버 환경 변수(`backend/.env` 또는 Render Environment)에만 둡니다.** 이 패키지의 어떤 파일에도 키가 없고, 화면은 우리 서버(`/api/...`)만 부릅니다.
 
 ---
+
+## 0-1. v0.4 → v0.5 바뀐 점 — 수업 검색으로 시간표 등록
+
+| 영역 | v0.4 | v0.5 |
+|---|---|---|
+| 시간표 입력 | 직접 추가 · 텍스트 · 캡처 이미지 | **수업 검색**: 과목명 · 교수명 · 과목번호 → 분반별 요일 · 시간 · 강의실 → 눌러서 미리 보기 → 추가(에브리타임처럼) |
+| 겹치는 수업 | 직접 추가 창에서 안내만 | 수업 검색에서 겹치면 **"바꿔서 추가"** → "겹치는 과목을 빼고 추가할까요?" → 먼저 있던 과목(모든 요일)을 빼고 넣음 · **되돌리기** |
+| 시간표 표 | 월~금 09~18시 고정 | 수업에 맞춰 07~24시로 넓어지고, 토요일 수업이 있으면 토 칸 |
+| 강의 목록 | — | `tools/fetch_courses.py` → `backend/courses/courses.json` → 서버 `GET /api/courses` |
+| 강의실 → 건물 | — | "미래관3층38호실" → 건물 "미래관" · 호실 "338" (건물별 도보시간 계산에 그대로 씀) |
 
 ## 0. v0.3 → v0.4 바뀐 점
 
@@ -81,7 +92,26 @@ cd frontend && npm install && npm run build && npm run build:preview
 
 - **실시간 실패 시:** 맨 위 점선 안내 "실시간 연결 실패 · 예시 데이터로 표시 중 (이유)", 출발 추천 카드가 점선 회색 "출발 추천 · 예시 데이터 기준", 버스 카드 제목 "버스 도착 (예시)", 배지 [예시 데이터 · 이유].
 - **설정:** 탑승 정류장 · 정류장까지 걷는 시간 · 수업 전 여유 · 출발 알림 · **데이터 · 서버 연결**(실시간 데이터 배지, 서버 동기화 synced/error, 서버 푸시 켜기 synced/error).
-- **시간표 탭:** 에브리타임식 격자, 텍스트 붙여 넣기, 캡처 이미지 인식(+OCR 베타).
+- **시간표 탭:** 넓은 화면은 왼쪽 시간표 · 오른쪽 **수업 검색**, 휴대폰은 수업 검색 → 시간표. 검색 결과를 누르면 시간표에 점선으로 미리 보이고(겹치는 칸은 빨강), **추가** → 요일 · 시간 · 건물 · 호실이 그대로 들어갑니다. 넣은 강의는 "추가됨 · 빼기"(모든 요일이 함께 빠짐). 원격처럼 시간이 정해지지 않은 강의는 넣을 수 없다고 안내합니다. 그 밖에 직접 추가(빈 칸 누르기 · 끌기), 텍스트 붙여 넣기, 캡처 이미지 인식(+OCR 베타).
+
+## 2-1. 강의 목록 만들기 — `tools/fetch_courses.py`
+
+수강신청 사이트의 **공개 강좌조회(수업계획서)** 화면이 쓰는 조회 API를 그대로 불러 `backend/courses/courses.json`을 만듭니다. 표준 라이브러리만 씁니다(Python 3.9 이상).
+
+```bash
+python tools/fetch_courses.py                                  # 2026년 2학기 학부 전체(대학별 개설강좌, 요청 사이 1초)
+python tools/fetch_courses.py --year 2027 --semester 1         # 다른 학기(1 · 여름 · 2 · 겨울)
+python tools/fetch_courses.py --name 회로이론 --name 자료구조     # 주요 과목만(과목명 검색)
+python tools/fetch_courses.py --names-file tools/my_courses.txt  # 과목명 목록 파일(한 줄에 하나)
+python tools/fetch_courses.py --college 공과대학 --dept 경영학부   # 대학 · 학부(과) 단위
+python tools/fetch_courses.py --raw raw.json                   # 받은 원본도 저장(문제 확인용) · --from-raw raw.json 으로 변환만
+```
+
+- **조회 방식(직접 확인):** `POST /api/subject/public/lectures/conditions/validation/ko`. `searchType "01"`(기본검색)은 과목명 · 번호 · 교수명이 필요하고, 조건 없는 '전체'는 서버가 받지 않습니다(HTTP 500). 그래서 전체는 `searchType "02"`(개설강좌)로 **대학마다** 나눠 모읍니다. 대학 · 학과 목록과 이수구분 코드표는 `GET /api/subject/public/commoncodes/all`.
+- **응답 → 강의:** `lectureRoms.results[]`의 `subjectId`(번호) · `classSequence`(분반) · `subjectNm` · `professorName` · `credits` · `categoryCode`(이수구분) · `dayTime`(주야) · `schedule.lectureTimes[]`(30분 칸: 요일 · 시작 · 끝 · 강의실). 30분 칸은 같은 요일 · 같은 강의실에서 이어지면 하나로 합칩니다(월 15:00-16:30 등). 교번 같은 개인 식별 번호는 저장하지 않습니다.
+- **쪽 나누기:** `offset`을 `limit`(100)씩 늘려 `totalCount`까지. 묶음 강의가 함께 와서 쪽마다 한두 건이 더 올 수 있어 강의 id로 중복을 지웁니다.
+- **예의:** 학기마다 한 번만 실행하고, 수강신청 기간처럼 접속이 몰리는 때는 피하세요. 학교 정보시스템 이용 규정을 따르세요. 수강신청(장바구니 · 신청) 기능은 부르지 않습니다.
+- 서버는 시작할 때 `courses.json`을 읽습니다(`COURSES_FILE`로 위치 변경 가능). 새 학기에는 스크립트를 다시 실행하고 push하세요.
 
 ## 3. 계산 (`shared/stopTrips.js` · `shared/recommend.js` — 서버와 화면이 같은 코드)
 
@@ -137,6 +167,7 @@ cd frontend && npm install && npm run build && npm run build:preview
 | GET · PATCH | `/api/me` | 시간표 · 탑승 정류장 · 설정(`X-User-Id` 헤더, 데모 수준 식별). 정류장 번호는 5자리 |
 | PUT | `/api/me/timetable` · POST `/api/me/timetable/import-text` | 시간표 저장 · 텍스트 해석 |
 | GET | `/api/plan` | 서버 쪽 추천(화면과 같은 계산) + 지금 보낼 알림 |
+| GET | `/api/courses?q=&limit=` · `/api/courses/meta` | 수업 검색(과목명 · 교수명 · 과목번호, 최대 50개) · 강의 목록 정보(학기 · 개수 · 받은 날). 목록이 없으면 503 안내 |
 | GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 |
 | GET/POST | `/api/push/key` · `/api/push/subscribe` | Web Push(VAPID) |
 | GET | `/api/live?routes=` · `/api/routes/:no/stations` · PATCH `/api/me/settings` | v0.3 노선별 API(호환용, 화면은 쓰지 않음) |
@@ -144,10 +175,12 @@ cd frontend && npm install && npm run build && npm run build:preview
 ## 7. 테스트
 
 ```bash
-cd shared && node --test                       # 31개: 응답 해석 · 국민대행 노선 · 차내 시간 · 원인 · 추천 · 알림 · 예시 노선
-cd backend && npm test                         # 40개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러
+cd shared && node --test                       # 36개: 응답 해석 · 국민대행 노선 · 차내 시간 · 원인 · 추천 · 알림 · 예시 노선 · 수업 검색 · 강의실 → 건물 · 겹치는 과목 빼기
+cd backend && npm test                         # 43개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러 · /api/courses
+python3 -m unittest tools/test_fetch_courses.py # 7개: 30분 칸 합치기 · 강의 변환 · 쪽 나누기 · 거절 조건 · 대학/학과 찾기 · 전체/과목명 모드
 python3 test/regression_preview.py             # 28개: 미리보기(모든 http 차단) 배지 3상태 · 휴대폰/PC · 넘침 · 오류
-node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 18개: 실서비스 빌드 + 가짜 서울시 서버 / 키 없는 서버
+python3 test/preview_courses.py                # 38개: 수업 검색 → 미리보기 · 바꿔서 추가(확인 · 취소 · 되돌리기) · 야간/토요일 · 빼기 · 휴대폰/PC
+node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 21개: 실서비스 빌드 + 가짜 서울시 서버 / 키 없는 서버 · 수업 검색 → 서버 저장
 ```
 
 **확인한 것(이 작업 환경, 헤드리스 Chromium):** 정류장 검색 → 선택 → 홈 3요소, 화면 출발 시각 = 서버 `/api/plan`, 정체 원인 표시, 서버에 정류장 저장, 서버 푸시 synced, iPhone 13에서 3요소가 스크롤 없이 보임, 키 없는 서버의 예시 데이터 배지 · 점선 카드 · 정류장 검색 안내 · VAPID 안내, 페이지 오류 0.
@@ -159,6 +192,8 @@ node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 18개: 실서�
 - **무료 호스팅:** 서버 저장소(JSON 파일)는 재배포 · 재시작 때 지워질 수 있습니다. 화면이 이 기기의 값으로 되살리지만, 서버 푸시는 그 사이 계산되지 않을 수 있습니다. 오래 쓰려면 DB를 붙이세요.
 - `shared/corridors.js`(노선별 도로 매핑표)는 예시입니다. `check:live` 출력의 실제 정류장 순서로 고치세요.
 - 로그인 · 사용자 보호(지금은 기기별 임의 ID), 서버 여러 대일 때 스케줄러 중복 발송 방지.
+- `fetch_courses.py`는 이 작업 환경에서 학교 서버에 직접 접속하지 못해, 연결된 브라우저로 확인한 응답 구조를 그대로 흉내 낸 데이터로만 시험했습니다. 처음 실행 결과(강의 수 · 시간표 시간이 있는 강의 수)를 꼭 확인하세요.
+- 직접 추가 창은 겹치는 수업이 있어도 안내만 하고 넣습니다(수업 검색만 '바꿔서 추가').
 
 ## 9. 출처 · 라이선스
 

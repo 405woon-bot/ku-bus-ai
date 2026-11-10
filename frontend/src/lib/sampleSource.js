@@ -3,6 +3,12 @@
 import { itemsOf, parseArrivals, parseStations, parseStopSearch, computeTrips } from '@shared/stopTrips.js';
 import { SAMPLE_ARRIVALS, SAMPLE_ROUTE_STATIONS, SAMPLE_STOP_SEARCH, SAMPLE_TIME } from '@shared/samples/seoulSample.js';
 import { toMin } from '@shared/time.js';
+import { searchCourses } from '@shared/courses.js';
+import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '@shared/samples/sampleCourses.js';
+
+export { SAMPLE_COURSE_META };
+/** 미리보기 수업 검색: 샘플 강의에서 찾음(실제 강의 목록 아님) */
+export const searchSampleCourses = (q) => searchCourses(SAMPLE_COURSES, q);
 
 export const SAMPLE_START_MIN = toMin(SAMPLE_TIME.hhmm);
 export const SAMPLE_WEEKDAY = SAMPLE_TIME.weekday;

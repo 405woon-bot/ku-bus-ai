@@ -6,6 +6,7 @@ import { createStore } from '../src/store.js';
 import { createLiveService } from '../src/transit/index.js';
 import { createPusher } from '../src/push.js';
 import { fakeSeoulFetch } from '../test/fixtures/seoulFixture.js';
+import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '../../shared/samples/sampleCourses.js';
 
 const base = new Date('2026-11-08T23:10:00Z').getTime(), t0 = Date.now(); // 서울 월 08:10부터 흐르는 시계
 const now = () => new Date(base + (Date.now() - t0));
@@ -13,7 +14,8 @@ const quiet = { warn() {}, info() {}, error() {} };
 const vapid = webpush.generateVAPIDKeys();
 
 const live = createLiveService({ env: { SEOUL_BUS_API_KEY: 'E2E-TEST-KEY' }, fetchImpl: fakeSeoulFetch(), background: false, log: quiet });
-createApp({ store: createStore(null), provider: live, now, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet) })
+const courses = { meta: { ...SAMPLE_COURSE_META, available: true, count: SAMPLE_COURSES.length }, courses: SAMPLE_COURSES };
+createApp({ store: createStore(null), provider: live, now, courses, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet) })
   .listen(8801, () => console.log('fixture seoul server 8801'));
 const nokey = createLiveService({ env: {}, background: false, log: quiet });
 createApp({ store: createStore(null), provider: nokey, now, pusher: createPusher({}, quiet) })

@@ -12,19 +12,25 @@ import { planFor } from './planner.js';
 import { parseTimetableText } from '../../shared/parseTimetableText.js';
 import { BUILDINGS, GATES, WALK_TABLE, DEFAULT_WALK_MIN } from '../../shared/campusData.js';
 import { toHHMM, toMin } from '../../shared/time.js';
+import { searchCourses } from '../../shared/courses.js';
+import { loadCourses } from './courses.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 function validClass(c, i) {
   const day = Number(c.day), start = clean(c.start, 5), end = clean(c.end, 5);
   if (!clean(c.name, 40)) throw new Error(`${i + 1}번째 수업: 과목명이 없어요`);
-  if (!(day >= 0 && day <= 4)) throw new Error(`${i + 1}번째 수업: 요일은 0(월)~4(금)`);
+  if (!(day >= 0 && day <= 5)) throw new Error(`${i + 1}번째 수업: 요일은 0(월)~5(토)`);
   if (!(toMin(end) > toMin(start))) throw new Error(`${i + 1}번째 수업: 시각을 확인하세요`);
-  return { id: clean(c.id, 40) || `c${Date.now().toString(36)}${i}`, name: clean(c.name, 40), day, start, end, building: clean(c.building, 30), room: clean(c.room, 12), color: Number(c.color) || 0 };
+  return {
+    id: clean(c.id, 40) || `c${Date.now().toString(36)}${i}`, name: clean(c.name, 40), day, start, end, building: clean(c.building, 30), room: clean(c.room, 12), color: Number(c.color) || 0,
+    // 수업 검색으로 넣은 강의: 같은 강의(요일 여러 개)를 묶는 번호와 교수·분반
+    ...(c.courseId ? { courseId: clean(c.courseId, 40), professor: clean(c.professor, 20), section: clean(c.section, 4) } : {}),
+  };
 }
 
 /** 테스트에서 시계·공급자를 바꿔 끼울 수 있게 앱을 함수로 만듭니다. provider = createLiveService() 또는 createMockProvider() */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses() }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -75,6 +81,16 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       if (b.walkOverrides && typeof b.walkOverrides === 'object') u.walkOverrides = b.walkOverrides;
     });
     res.json({ ok: true });
+  });
+
+  // 수업 검색(시간표 탭): courses.json에서 과목명·교수명·과목번호로 찾기
+  app.get('/api/courses/meta', (_req, res) => res.json(courses.meta));
+  app.get('/api/courses', (req, res) => {
+    if (!courses.meta.available) return res.status(503).json({ error: '강의 목록(courses.json)이 아직 없어요. tools/fetch_courses.py로 만들어 서버에 올려 주세요.' });
+    const q = clean(req.query.q, 40);
+    if (!q) return res.status(400).json({ error: '검색어를 입력하세요' });
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 30));
+    res.json({ courses: searchCourses(courses.courses, q, { limit }), meta: courses.meta });
   });
 
   // 탑승 정류장 고르기: 이름 검색 / 내 주변 (서울시 정류소정보조회)
@@ -171,9 +187,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const t0 = Date.now(), base = env.FAKE_NOW ? new Date(env.FAKE_NOW).getTime() : null;
   const now = base ? () => new Date(base + (Date.now() - t0)) : () => new Date();
   const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label' });
-  const app = createApp({ store, provider, pusher, now, scheduler });
+  const courses = loadCourses(env.COURSES_FILE || undefined);
+  const app = createApp({ store, provider, pusher, now, scheduler, courses });
   const port = Number(env.PORT) || 8787;
   const h = provider.health();
-  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 푸시: ${pusher.enabled ? '켜짐' : '꺼짐'})`));
+  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 푸시: ${pusher.enabled ? '켜짐' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
 }

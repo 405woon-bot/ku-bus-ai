@@ -29,6 +29,10 @@ function reducer(s, a) {
     case 'replaceClasses': return { ...s, sampleTimetable: false, classes: a.items.map((c) => ({ ...c, id: newId() })), fired: {} };
     case 'updateClass': return { ...s, sampleTimetable: false, classes: s.classes.map((c) => (c.id === a.item.id ? { ...c, ...a.item } : c)) };
     case 'deleteClass': return { ...s, sampleTimetable: false, classes: s.classes.filter((c) => c.id !== a.id) };
+    case 'deleteCourse': return { ...s, sampleTimetable: false, classes: s.classes.filter((c) => c.courseId !== a.courseId) }; // 수업 검색으로 넣은 강의(요일 여러 개)를 한 번에
+    // 겹치는 과목을 빼고 강의를 넣기(시간표에 겹치는 수업이 남지 않게) · 되돌리기
+    case 'swapClasses': return { ...s, sampleTimetable: false, classes: [...s.classes.filter((c) => !a.removeIds.includes(c.id)), ...a.items.map((c) => ({ ...c, id: newId() }))] };
+    case 'restoreClasses': return { ...s, classes: a.classes };
     case 'setStop': return { ...s, stop: a.stop, fired: {} };
     case 'setPrefs': return { ...s, prefs: { ...s.prefs, ...a.patch } };
     case 'setPreview': return { ...s, preview: { ...s.preview, ...a.patch, epoch: a.rearm ? s.preview.epoch + 1 : s.preview.epoch }, fired: a.rearm ? {} : s.fired };

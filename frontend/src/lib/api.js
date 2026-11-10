@@ -14,6 +14,8 @@ export const api = {
   nearStops: (lat, lon) => req('GET', `/api/stops/near?lat=${lat}&lon=${lon}`),
   trips: (arsId) => req('GET', `/api/stops/${encodeURIComponent(arsId)}/trips`),
   health: () => req('GET', '/api/health'),
+  searchCourses: (q) => req('GET', `/api/courses?q=${encodeURIComponent(q)}`),
+  coursesMeta: () => req('GET', '/api/courses/meta'),
   me: () => req('GET', '/api/me'),
   saveMe: (patch) => req('PATCH', '/api/me', patch),
   saveTimetable: (classes) => req('PUT', '/api/me/timetable', { classes }),
