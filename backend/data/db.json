@@ -1,0 +1,84 @@
+{
+ "users": {
+  "u2iqnzo4n": {
+   "classes": [
+    {
+     "id": "s1",
+     "name": "자료구조",
+     "day": 0,
+     "start": "09:00",
+     "end": "10:15",
+     "building": "미래관",
+     "room": "301",
+     "color": 0
+    },
+    {
+     "id": "s2",
+     "name": "자료구조",
+     "day": 2,
+     "start": "09:00",
+     "end": "10:15",
+     "building": "미래관",
+     "room": "301",
+     "color": 0
+    },
+    {
+     "id": "s3",
+     "name": "운영체제",
+     "day": 1,
+     "start": "10:30",
+     "end": "11:45",
+     "building": "북악관",
+     "room": "605",
+     "color": 0
+    }
+   ],
+   "routes": [
+    {
+     "id": "171",
+     "no": "171",
+     "type": "간선",
+     "gate": "정문",
+     "stop": "국민대학교앞",
+     "usualMin": 12,
+     "corridor": "정릉로",
+     "enabled": true,
+     "boardArsId": "",
+     "alightName": "국민대학교앞"
+    },
+    {
+     "id": "1711",
+     "no": "1711",
+     "type": "지선",
+     "gate": "정문",
+     "stop": "국민대앞",
+     "usualMin": 14,
+     "corridor": "정릉로",
+     "enabled": true,
+     "boardArsId": "",
+     "alightName": "국민대앞"
+    },
+    {
+     "id": "1112",
+     "no": "1112",
+     "type": "지선",
+     "gate": "후문",
+     "stop": "국민대후문",
+     "usualMin": 13,
+     "corridor": "정릉로9길",
+     "enabled": true,
+     "boardArsId": "",
+     "alightName": "국민대후문"
+    }
+   ],
+   "primaryRouteId": "171",
+   "settings": {
+    "marginMin": 5,
+    "notifyBeforeMin": 10
+   },
+   "walkOverrides": {},
+   "push": [],
+   "fired": {}
+  }
+ }
+}

@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 레이아웃: 상단 바 + (왼쪽) 오늘의 등교 판단 열 + (오른쪽) 시간표·지도·설정 열. 1024px 미만은 한 열로 쌓기. */
+:root {
+  /* KU Bus 지정 팔레트 — 값 고정 */
+  --primary: #206DEF;
+  --primary-active: #0057CD;
+  --bus-blue: #4A92EB;
+  --background: #F9F9F9;
+  --panel: #FFFFFF;
+  --text: #222222;
+  --text-muted: #888888;
+  --border: #E5E5E5;
+  --road: #FECA7D;
+  --park: #D0E2C2;
+  --building: #DCE9F1;
+  /* 파생: 지도 테두리·상태색 */
+  --road-edge: #E7AD55;
+  --minor-edge: #D9D9D9;
+  --building-edge: #BFD1DD;
+  --campus-fill: #EEF3F8;
+  --ok: #1E7B45;
+  --warn: #A35F00;
+  --danger: #D0342C;
+  --branch: #3E9B4F;
+  color-scheme: light;
+}
+html, body { background: var(--background); }
+body { margin: 0; color: var(--text); word-break: keep-all; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 31; background: var(--panel); }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.num { font-family: 'Barlow Semi Condensed', 'Arial Narrow', 'IBM Plex Sans KR', sans-serif; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+h1, h2, h3 { text-wrap: balance; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@keyframes toast-in { from { transform: translateY(-8px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.toast-in { animation: toast-in .22s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

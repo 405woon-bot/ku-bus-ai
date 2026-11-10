@@ -1,0 +1,1 @@
+{ "name": "ku-bus-ai-shared", "private": true, "type": "module", "scripts": { "test": "node --test" } }
