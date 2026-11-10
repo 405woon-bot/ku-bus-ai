@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DAYS, toHHMM, toMin } from '@shared/time.js';
-import { BUILDINGS, DEFAULT_WALK_MIN } from '@shared/campusData.js';
+import { BUILDINGS } from '@shared/campusData.js';
 import { PERIODS } from '@shared/parseTimetableText.js';
 import { COURSE_COLORS, colorIndexFor } from '../lib/palette.js';
 import { Button, Field, Modal, Segmented, inputCls } from './ui.jsx';
@@ -8,7 +8,7 @@ import { Button, Field, Modal, Segmented, inputCls } from './ui.jsx';
 const SORTED = [...BUILDINGS].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 
 /** 수업 추가/수정 대화상자: 과목명 · 요일 · 시각 또는 교시 · 건물/강의실 · 색 */
-export default function ClassDialog({ initial, classes, walkTable, onSave, onDelete, onClose }) {
+export default function ClassDialog({ initial, classes, onSave, onDelete, onClose }) {
   const editing = Boolean(initial.id);
   const known = !initial.building || BUILDINGS.some((b) => b.name === initial.building);
   const [name, setName] = useState(initial.name || '');
@@ -32,7 +32,6 @@ export default function ClassDialog({ initial, classes, walkTable, onSave, onDel
   if (!(toMin(times.end) > toMin(times.start))) errors.push('종료 시각은 시작 시각보다 늦어야 해요.');
   if (!bName) errors.push('강의 건물을 고르세요.');
   const overlaps = classes.filter((c) => c.id !== initial.id && days.includes(c.day) && toMin(c.start) < toMin(times.end) && toMin(times.start) < toMin(c.end));
-  const walk = walkTable[bName];
 
   const toggleDay = (d) => setDays((ds) => (editing ? [d] : ds.includes(d) ? ds.filter((x) => x !== d) : [...ds, d].sort()));
   const save = () => {
@@ -89,9 +88,6 @@ export default function ClassDialog({ initial, classes, walkTable, onSave, onDel
           </Field>
           <Field label="강의실"><input className={inputCls} value={room} onChange={(e) => setRoom(e.target.value)} placeholder="예: 301" maxLength={12} /></Field>
           {building === '__custom' && <Field className="col-span-2" label="건물 이름"><input className={inputCls} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="예: 새 강의동" /></Field>}
-          <p className="col-span-2 rounded-lg bg-surface px-3 py-2 text-xs text-ink-muted">
-            {bName ? (walk ? <>도보시간 — 정문 하차 <b className="text-ink">{walk.정문}분</b> · 후문 하차 <b className="text-ink">{walk.후문}분</b> ({walk.src})</> : <>등록된 도보시간이 없어 기본 {DEFAULT_WALK_MIN}분을 씁니다.</>) : '건물을 고르면 정문·후문에서 걷는 시간이 보여요.'}
-          </p>
         </div>
         <div className="grid gap-1.5">
           <span className="text-[13px] font-semibold">색</span>

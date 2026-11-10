@@ -5,9 +5,15 @@
 //   busRouteInfo/getBusRouteList?strSrch=171        노선번호 → busRouteId          (노선정보조회)
 //   busRouteInfo/getStaionByRoute?busRouteId=…      seq·arsId·stationNm·fullSectDist(m)·sectSpd  (노선정보조회)
 //   stationinfo/getStationByUid?arsId=…             (상세기능명 getStationByUidItem) arrmsg1·traTime1(초)·staOrd  (정류소정보조회)
+//   stationinfo/getStationByName?stSrch=…           정류장 이름 검색 stNm·arsId·tmX·tmY                    (정류소정보조회)
+//   stationinfo/getStationByPos?tmX=&tmY=&radius=   내 주변 정류장 stationNm·arsId·gpsX·gpsY·dist        (정류소정보조회)
 // 인증키는 서버 환경변수로만 받고, 오류 메시지·로그에서 지웁니다.
 import { SeoulApiError, parseSeoulResponse } from './seoulResponse.js';
 import { causeFromSection } from '../../../shared/corridors.js';
+import { computeTrips, parseArrivals, parseArrmsg, parseStations, parseStopSearch, sectionConvention } from '../../../shared/stopTrips.js';
+
+// 응답 해석은 화면 미리보기와 같은 shared/stopTrips.js 코드를 씁니다.
+export { parseArrmsg, parseStations, sectionConvention } from '../../../shared/stopTrips.js';
 
 export { SeoulApiError } from './seoulResponse.js';
 export const DEFAULT_BASE_URL = 'http://ws.bus.go.kr/api/rest';
@@ -62,30 +68,6 @@ export function createSeoulClient({ key, fetchImpl = globalThis.fetch, baseUrl =
   return { call, redact, stats, hasKey: Boolean(raw) };
 }
 
-/** getStaionByRoute 응답 → 정류장 목록(순번 정렬) */
-export function parseStations(items) {
-  return items.map((x) => ({
-    seq: Math.trunc(num(x.seq)),
-    arsId: String(x.arsId || x.stationNo || '').trim(),
-    stId: String(x.station ?? '').trim(),
-    name: String(x.stationNm ?? '').trim(),
-    sectDistM: num(x.fullSectDist) || 0,   // 정류소간 거리(m) — 가이드 예제: 1번 정류장 0, 2번 249
-    sectSpdKmh: num(x.sectSpd) || 0,       // 구간속도(km/h)
-    direction: String(x.direction ?? ''),
-    turn: String(x.transYn ?? '') === 'Y',
-    lon: num(x.gpsX), lat: num(x.gpsY),
-  })).filter((s) => Number.isFinite(s.seq)).sort((a, b) => a.seq - b.seq);
-}
-
-/**
- * 구간 값이 어느 행에 붙어 있는지: 가이드 예제처럼 첫 정류장의 fullSectDist가 0이면
- * '직전 정류장 → 이 정류장' 구간이 이 행에 있음(arrival). 마지막 행이 0이면 반대(departure).
- */
-export function sectionConvention(stations) {
-  if (stations.length && stations[0].sectDistM === 0) return 'arrival';
-  if (stations.length && stations[stations.length - 1].sectDistM === 0) return 'departure';
-  return 'arrival';
-}
 
 /**
  * 승차 seq → 하차 seq 차내 소요시간(분) = Σ(구간거리 ÷ 구간속도) + (중간 정류장 수 × 20초)
@@ -109,14 +91,6 @@ export function inVehicleMinutes(stations, boardSeq, alightSeq, { dwellSec = DWE
   return { minutes: movingMin + dwellMin, movingMin, dwellMin, distM: sections.reduce((a, s) => a + s.distM, 0), intermediateStops, sections, slowest, convention };
 }
 
-/** "3분12초후[2번째 전]" → 192초, "곧 도착" → 30초, "운행종료"·"출발대기" → null */
-export function parseArrmsg(msg) {
-  const s = String(msg ?? '').trim();
-  if (!s) return null;
-  if (/곧\s*도착/.test(s)) return 30;
-  const m = /(?:(\d+)\s*분)?\s*(?:(\d+)\s*초)?\s*후/.exec(s);
-  return m && (m[1] || m[2]) ? Number(m[1] || 0) * 60 + Number(m[2] || 0) : null;
-}
 
 const CONGESTION = { 3: '여유', 4: '보통', 5: '혼잡' };
 /** getStationByUid 응답에서 이 노선의 도착 예정 정보(첫째·둘째 버스) */
@@ -142,7 +116,12 @@ export function parseArrival(items, { busRouteId, no }) {
 /**
  * 노선별 실시간 계산(캐시 사용). cache: { get(key), set(key, value, ttlMs) } — 메모리 또는 Redis
  */
-export function createSeoulAdapter({ client, cache, ttlMs = 30_000, routeIdTtlMs = 12 * 3600_000 }) {
+export function createSeoulAdapter({
+  client, cache, ttlMs = 30_000, routeIdTtlMs = 12 * 3600_000,
+  stationsTtlMs = 5 * 60_000,     // 탑승 정류장 화면용 경유 정류소(구간 거리·속도) 캐시 — 노선정보는 하루 한 번 갱신(가이드)이라 길게
+  searchTtlMs = 6 * 3600_000,     // 정류장 이름·주변 검색
+  notKuTtlMs = 12 * 3600_000,     // '이 정류장에서 국민대로 안 가는 노선' 기억 → 경유 정류소를 다시 부르지 않음
+} = {}) {
   const inflight = new Map();
   async function cached(key, ttl, load) {
     const hit = await cache.get(key);
@@ -166,6 +145,31 @@ export function createSeoulAdapter({ client, cache, ttlMs = 30_000, routeIdTtlMs
   }
   const stations = (id) => cached(`stations:${id}`, ttlMs, async () => parseStations((await client.call('busRouteInfo/getStaionByRoute', { busRouteId: id })).items));
   const arrivalsAt = (arsId) => cached(`arrivals:${arsId}`, ttlMs, async () => (await client.call('stationinfo/getStationByUid', { arsId })).items);
+  const stopStations = (id) => cached(`stopstations:${id}`, stationsTtlMs, async () => parseStations((await client.call('busRouteInfo/getStaionByRoute', { busRouteId: id })).items));
+
+  /** 정류장 이름 검색(2글자 이상) */
+  const searchStops = (q) => cached(`search:${q}`, searchTtlMs, async () => parseStopSearch((await client.call('stationinfo/getStationByName', { stSrch: q })).items));
+  /** 내 주변 정류장(WGS84 좌표, 반경 m) — 가까운 순 */
+  const nearStops = (lat, lon, radius = 400) => cached(`near:${lat.toFixed(4)},${lon.toFixed(4)},${radius}`, searchTtlMs, async () =>
+    parseStopSearch((await client.call('stationinfo/getStationByPos', { tmX: lon.toFixed(7), tmY: lat.toFixed(7), radius: String(radius) })).items)
+      .sort((a, b) => (a.distM || 0) - (b.distM || 0)));
+
+  /** 탑승 정류장 하나 → 국민대로 가는 노선별 실시간 도착·차내 시간·정체·원인 */
+  async function stopTrips(arsId) {
+    const arrivals = parseArrivals(await arrivalsAt(arsId));
+    const stationsByRoute = {};
+    await Promise.all([...new Set(arrivals.map((a) => a.busRouteId))].map(async (id) => {
+      if ((await cache.get(`notku:${arsId}:${id}`))?.value) return;
+      try { stationsByRoute[id] = await stopStations(id); } catch (e) {
+        if (['quota', 'auth', 'no-key'].includes(e.kind)) throw e; // 키·한도 문제는 전체 실패로
+      }
+    }));
+    const trips = computeTrips({ arrivals, stationsByRoute, boardArsId: arsId });
+    for (const id of Object.keys(stationsByRoute)) {
+      if (!trips.some((t) => t.busRouteId === id)) await cache.set(`notku:${arsId}:${id}`, true, notKuTtlMs);
+    }
+    return trips;
+  }
 
   /**
    * @param {{ no:string, boardArsId:string, alightName?:string, stop?:string, busRouteId?:string, corridor?:string, corridorSeq?:number[] }} route
@@ -204,5 +208,5 @@ export function createSeoulAdapter({ client, cache, ttlMs = 30_000, routeIdTtlMs
     const id = await routeId(no, explicitId);
     return { busRouteId: id, stations: await stations(id) };
   }
-  return { routeLive, stationsOf, routeId };
+  return { routeLive, stationsOf, routeId, searchStops, nearStops, stopTrips };
 }

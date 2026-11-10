@@ -24,4 +24,4 @@ export function colorIndexFor(name, classes) {
   return classes.length % COURSE_COLORS.length;
 }
 /** 서울 버스 관례: 간선 파랑, 지선 초록 */
-export const routeColor = (type) => (type === '지선' ? '#3E9B4F' : '#4A92EB');
+export const routeColor = (type) => ({ 지선: '#3E9B4F', 마을: '#3E9B4F', 광역: '#D0342C', 순환: '#C98A00' }[type] || '#4A92EB');

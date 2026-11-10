@@ -1,12 +1,12 @@
 {
   "name": "ku-bus-ai-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:single": "vite build --mode single",
+    "build:preview": "vite build --mode preview",
     "preview": "vite preview"
   },
   "dependencies": {

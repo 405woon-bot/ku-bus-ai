@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EXAMPLE_ROUTES } from '../../shared/transitModel.js';
 import { DEFAULT_MARGIN_MIN, DEFAULT_NOTIFY_BEFORE_MIN } from '../../shared/departure.js';
+import { DEFAULTS } from '../../shared/recommend.js';
 
 const ARS_ID = /^\d{5}$/;
 const cut = (v, n) => String(v ?? '').trim().slice(0, n);
@@ -23,13 +24,13 @@ export function cleanRoute(r, i = 0) {
   };
 }
 
+/** 새 사용자: 시간표는 비어 있고, 탑승 정류장 하나만 고르면 바로 계산됩니다. */
 export const defaultUser = () => ({
-  classes: [
-    { id: 's1', name: '자료구조', day: 0, start: '09:00', end: '10:15', building: '미래관', room: '301' },
-    { id: 's2', name: '자료구조', day: 2, start: '09:00', end: '10:15', building: '미래관', room: '301' },
-    { id: 's3', name: '운영체제', day: 1, start: '10:30', end: '11:45', building: '북악관', room: '605' },
-  ],
-  routes: EXAMPLE_ROUTES.map((r, i) => cleanRoute(r, i)),   // boardArsId는 사용자가 설정(비어 있으면 예시 데이터로 계산)
+  classes: [],
+  stop: null,      // { arsId, name } — 탑승 정류장(v0.4 화면)
+  prefs: { walkToStopMin: DEFAULTS.walkToStopMin, marginMin: DEFAULTS.marginMin, notify: true, notifyBeforeMin: DEFAULTS.notifyBeforeMin },
+  // v0.3 노선별 설정 — /api/live?routes= 호환용(화면은 탑승 정류장 방식을 씀)
+  routes: EXAMPLE_ROUTES.map((r, i) => cleanRoute(r, i)),
   primaryRouteId: '171',
   settings: { marginMin: DEFAULT_MARGIN_MIN, notifyBeforeMin: DEFAULT_NOTIFY_BEFORE_MIN },
   walkOverrides: {},
@@ -47,7 +48,14 @@ export function createStore(file) {
     timer = setTimeout(() => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(db, null, 1)); }, 200);
   };
   return {
-    user(id) { if (!db.users[id]) { db.users[id] = defaultUser(); persist(); } return db.users[id]; },
+    user(id) {
+      if (!db.users[id]) { db.users[id] = defaultUser(); persist(); }
+      const u = db.users[id], d = defaultUser();
+      // 예전 버전에서 만든 사용자: 빠진 항목만 기본값으로 채움
+      for (const [k, v] of Object.entries(d)) if (u[k] === undefined) u[k] = v;
+      u.prefs = { ...d.prefs, ...u.prefs };
+      return u;
+    },
     update(id, fn) { const u = this.user(id); fn(u); persist(); return u; },
     users() { return Object.entries(db.users); },
   };

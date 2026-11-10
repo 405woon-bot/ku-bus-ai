@@ -36,6 +36,14 @@ export const ARRIVALS = {
   ],
 };
 
+/** 정류장 검색(getStationByName: stId·stNm·tmX·tmY·arsId / getStationByPos: stationId·stationNm·gpsX·gpsY·arsId·dist) */
+export const STOPS = [
+  { stId: '108000001', stNm: '정릉시장', arsId: '08901', tmX: '127.0101', tmY: '37.6060' },
+  { stId: '108000011', stNm: '정릉시장', arsId: '08911', tmX: '127.0104', tmY: '37.6062' },
+  { stId: '108000002', stNm: '정릉3동주민센터앞', arsId: '08902', tmX: '127.0046', tmY: '37.6086' },
+  { stId: '108000005', stNm: '국민대학교앞', arsId: '08905', tmX: '126.9970', tmY: '37.6106' },
+];
+
 const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 export function xml(items, { code = '0', msg = '정상적으로 처리되었습니다.' } = {}) {
   const body = items.map((o) => `<itemList>${Object.entries(o).map(([k, v]) => `<${k}>${esc(v)}</${k}>`).join('')}</itemList>`).join('\n');
@@ -72,6 +80,15 @@ export function fakeSeoulFetch({ format = 'xml', speeds = {}, fail } = {}) {
     if (u.pathname.endsWith('/busRouteInfo/getStaionByRoute')) {
       const id = u.searchParams.get('busRouteId');
       return ok(out(stationItems(id, speeds[id] || {})));
+    }
+    if (u.pathname.endsWith('/stationinfo/getStationByName')) {
+      const q = u.searchParams.get('stSrch');
+      const items = STOPS.filter((x) => x.stNm.includes(q));
+      return ok(items.length ? out(items) : out([], { code: '3', msg: '정류소를 찾을 수 없습니다' }));
+    }
+    if (u.pathname.endsWith('/stationinfo/getStationByPos')) {
+      const items = STOPS.slice(0, 3).map((x, i) => ({ stationId: x.stId, stationNm: x.stNm, gpsX: x.tmX, gpsY: x.tmY, arsId: x.arsId, dist: String([120, 35, 260][i]), stationTp: '0' }));
+      return ok(out(items));
     }
     if (u.pathname.endsWith('/stationinfo/getStationByUid')) {
       const items = ARRIVALS[u.searchParams.get('arsId')];

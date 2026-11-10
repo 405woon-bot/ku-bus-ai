@@ -7,6 +7,7 @@ import { mockLive } from '../../../shared/transitModel.js';
 import { routeStatus } from '../../../shared/departure.js';
 import { mainReason, reasonText } from '../../../shared/liveStatus.js';
 import { seoulParts } from '../../../shared/time.js';
+import { mockTrips } from '../../../shared/stopTrips.js';
 import { SeoulApiError, createSeoulAdapter, createSeoulClient } from './seoulBus.js';
 import { createMemoryCache } from './cache.js';
 
@@ -17,12 +18,18 @@ const withStatus = (r) => {
 };
 
 export function createMockProvider(scenario = 'jeongneung') {
+  const noSearch = async () => { throw new SeoulApiError('no-key', '예시 데이터 모드에서는 정류장을 검색할 수 없어요'); };
   return {
     name: 'mock',
     async live(routes, now) {
       const r = mockLive(routes, scenario, seoulParts(now).minutes);
       return { ...r, routes: r.routes.map(withStatus), source: 'mock', provider: 'mock' };
     },
+    async stopTrips(_arsId, now = new Date()) {
+      return { trips: mockTrips(seoulParts(now).minutes, scenario), source: 'mock', reason: 'demo', reasonText: reasonText('demo'), stale: false, ageSec: 0, fetchedAt: now.toISOString() };
+    },
+    searchStops: noSearch,
+    nearStops: noSearch,
   };
 }
 
@@ -76,7 +83,8 @@ export function createLiveService({
     key, fetchImpl, baseUrl: env.SEOUL_BUS_BASE_URL || undefined, format: env.SEOUL_BUS_FORMAT === 'json' ? 'json' : 'xml',
     keyParam: env.SEOUL_BUS_KEY_PARAM || 'ServiceKey', timeoutMs: Number(env.SEOUL_BUS_TIMEOUT_MS) || 6000,
   });
-  const adapter = createSeoulAdapter({ client, cache, ttlMs });
+  // 탑승 정류장 화면의 경유 정류소 캐시(기본 5분): 노선정보는 하루 한 번 갱신된다고 가이드에 적혀 있어 호출을 아낌
+  const adapter = createSeoulAdapter({ client, cache, ttlMs, stationsTtlMs: Math.max(30, Number(env.ROUTE_CACHE_SEC) || 300) * 1000 });
   const mock = createMockProvider(env.MOCK_SCENARIO || 'jeongneung');
   const lastGood = new Map();  // 노선 설정 키 → { at, data }
   const active = new Map();    // 노선 설정 키 → { route, seenAt }
@@ -149,6 +157,55 @@ export function createLiveService({
     return { routes: out, cause: delayed[0]?.cause ?? null, roadDelays, source: 'seoul', provider: 'seoul', partial: out.some((r) => r.liveMin == null), updatedAt };
   }
 
+  // ── 탑승 정류장 하나 → 국민대행 노선(v0.4 화면) ──
+  const scenario = env.MOCK_SCENARIO || 'jeongneung';
+  const stopLastGood = new Map();   // arsId → { at, trips }
+  const stopsSeen = new Map();      // arsId → 마지막 요청 시각(상태 표시용)
+  const toErr = (e) => (e instanceof SeoulApiError ? e : new SeoulApiError('api', e.message));
+  function noteError(err) {
+    if (err.kind === 'quota') state.quotaUntil = clock() + quotaCooldownMs; // 한도 초과면 한동안 호출을 멈춤
+    if (err.kind !== 'config') state.lastError = { kind: err.kind, message: err.message, at: clock() };
+  }
+  /** 정류장 검색은 예시로 대신할 수 없으므로 실패하면 이유와 함께 예외 */
+  async function lookup(load) {
+    if (!key) throw new SeoulApiError('no-key', '서버에 서울시 버스 API 키가 없어 정류장을 찾을 수 없어요');
+    if (clock() < state.quotaUntil) throw new SeoulApiError('quota', '서울시 API 호출 한도를 넘어 잠시 정류장을 찾을 수 없어요');
+    try { const r = await load(); state.lastOkAt = clock(); return r; } catch (e) { const err = toErr(e); noteError(err); throw err; }
+  }
+
+  /**
+   * 탑승 정류장 → 국민대로 가는 노선별 실시간 도착·차내 시간·정체.
+   * 실패하면 직전 정상값(3분 이내, 도착 예정은 흐른 시간만큼 줄임) → 그것도 없으면 예시 데이터(shared/transitModel.js)
+   * @returns {Promise<{ trips, source:'seoul'|'mock', reason, reasonText, stale, ageSec, fetchedAt, error? }>}
+   */
+  async function stopTrips(arsId, nowDate = new Date()) {
+    stopsSeen.set(arsId, clock());
+    const fetchedAt = new Date(clock()).toISOString();
+    const example = (reason, err) => {
+      Object.assign(state, { provider: 'mock', reason });
+      return { trips: mockTrips(seoulParts(nowDate).minutes, scenario), source: 'mock', reason, reasonText: reasonText(reason), stale: false, ageSec: 0, fetchedAt, error: err?.message ?? null };
+    };
+    const lg = stopLastGood.get(arsId);
+    const staleOk = lg && clock() - lg.at <= staleMaxMs;
+    const fromLast = (kind) => {
+      const ageSec = (clock() - lg.at) / 1000;
+      const trips = lg.trips.map((t) => ({ ...t, etasSec: t.etasSec.map((v) => v - ageSec).filter((v) => v > -20) }));
+      return { trips, source: 'seoul', reason: kind, reasonText: reasonText(kind), stale: true, ageSec: Math.round(ageSec), fetchedAt };
+    };
+    if (!key) return example('no-key');
+    if (clock() < state.quotaUntil) return staleOk ? fromLast('quota') : example('quota');
+    try {
+      const trips = await adapter.stopTrips(arsId);
+      stopLastGood.set(arsId, { at: clock(), trips });
+      Object.assign(state, { provider: 'seoul', reason: null, lastOkAt: clock() });
+      return { trips, source: 'seoul', reason: null, reasonText: '', stale: false, ageSec: 0, fetchedAt };
+    } catch (e) {
+      const err = toErr(e);
+      noteError(err);
+      return staleOk ? fromLast(err.kind) : example(err.kind, err);
+    }
+  }
+
   // 30초마다 최근 15분 안에 요청된 노선을 미리 갱신 → 화면·스케줄러 요청은 캐시에서 바로 응답
   let timer = null;
   async function refreshActive() {
@@ -165,6 +222,9 @@ export function createLiveService({
     live,
     refreshActive,
     stationsOf: (no, busRouteId) => adapter.stationsOf(no, busRouteId),
+    stopTrips,
+    searchStops: (q) => lookup(() => adapter.searchStops(q)),
+    nearStops: (lat, lon, radius = 400) => lookup(() => adapter.nearStops(lat, lon, radius)),
     health() {
       const quota = clock() < state.quotaUntil;
       const provider = !key || quota ? 'mock' : state.provider;
@@ -175,6 +235,7 @@ export function createLiveService({
         lastError: state.lastError && { ...state.lastError, at: new Date(state.lastError.at).toISOString() },
         quotaUntil: quota ? new Date(state.quotaUntil).toISOString() : null,
         apiCalls: client.stats.calls, activeRoutes: active.size,
+        activeStops: [...stopsSeen.values()].filter((t) => clock() - t <= activeWindowMs).length,
       };
     },
     stop() { clearInterval(timer); },

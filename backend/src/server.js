@@ -14,6 +14,7 @@ import { BUILDINGS, GATES, WALK_TABLE, DEFAULT_WALK_MIN } from '../../shared/cam
 import { toHHMM, toMin } from '../../shared/time.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
+const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 function validClass(c, i) {
   const day = Number(c.day), start = clean(c.start, 5), end = clean(c.end, 5);
   if (!clean(c.name, 40)) throw new Error(`${i + 1}번째 수업: 과목명이 없어요`);
@@ -55,6 +56,47 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     if (req.body?.apply) store.update(req.userId, (u) => { u.classes = req.body.replace ? ok : [...u.classes, ...ok]; u.fired = {}; });
     res.json({ parsed, applied: Boolean(req.body?.apply), count: ok.length });
   });
+  // 탑승 정류장·출발 계산 설정(v0.4 화면)
+  app.patch('/api/me', (req, res) => {
+    const b = req.body || {};
+    if (b.stop && !ARS_ID.test(clean(b.stop.arsId, 10))) return res.status(400).json({ error: '정류장 번호(arsId)는 숫자 5자리예요' });
+    store.update(req.userId, (u) => {
+      if (b.stop === null) u.stop = null;
+      else if (b.stop?.arsId) {
+        const next = { arsId: clean(b.stop.arsId, 10), name: clean(b.stop.name, 40) };
+        if (next.arsId !== u.stop?.arsId) u.fired = {};
+        u.stop = next;
+      }
+      const p = b.prefs || {};
+      if (Number.isFinite(p.walkToStopMin)) u.prefs.walkToStopMin = Math.max(0, Math.min(30, p.walkToStopMin));
+      if (Number.isFinite(p.marginMin)) u.prefs.marginMin = Math.max(0, Math.min(30, p.marginMin));
+      if (Number.isFinite(p.notifyBeforeMin)) u.prefs.notifyBeforeMin = Math.max(1, Math.min(60, p.notifyBeforeMin));
+      if (typeof p.notify === 'boolean') u.prefs.notify = p.notify;
+      if (b.walkOverrides && typeof b.walkOverrides === 'object') u.walkOverrides = b.walkOverrides;
+    });
+    res.json({ ok: true });
+  });
+
+  // 탑승 정류장 고르기: 이름 검색 / 내 주변 (서울시 정류소정보조회)
+  const lookupError = (res, e) => res.status(['no-key', 'quota', 'auth'].includes(e.kind) ? 503 : 502).json({ error: e.message, kind: e.kind || 'api' });
+  app.get('/api/stops', async (req, res) => {
+    const q = clean(req.query.q, 30);
+    if (q.length < 2) return res.status(400).json({ error: '정류장 이름을 두 글자 이상 입력하세요' });
+    try { res.json({ stops: (await provider.searchStops(q)).slice(0, 30) }); } catch (e) { lookupError(res, e); }
+  });
+  app.get('/api/stops/near', async (req, res) => {
+    const lat = Number(req.query.lat), lon = Number(req.query.lon);
+    if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) return res.status(400).json({ error: '위치(lat, lon)가 필요해요' });
+    try { res.json({ stops: (await provider.nearStops(lat, lon, 400)).slice(0, 20) }); } catch (e) { lookupError(res, e); }
+  });
+  // 탑승 정류장 → 국민대행 노선별 실시간 도착·차내 시간·정체(화면이 20초마다 호출). 실패하면 직전 값 또는 예시 데이터 + 이유
+  app.get('/api/stops/:arsId/trips', async (req, res) => {
+    const arsId = clean(req.params.arsId, 10);
+    if (!ARS_ID.test(arsId)) return res.status(400).json({ error: '정류장 번호(arsId)는 숫자 5자리예요' });
+    try { res.json(await provider.stopTrips(arsId, now())); } catch (e) { res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
+  });
+
+  // v0.3 노선별 설정(/api/live 호환)
   app.patch('/api/me/settings', (req, res) => {
     const b = req.body || {};
     store.update(req.userId, (u) => {
@@ -93,11 +135,11 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     try { res.json({ ...(await provider.live(routes, now())), updatedAt: now().toISOString() }); }
     catch (e) { res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
   });
-  // 오늘 첫 수업 기준 계획 + 지금 보낼 알림(미리 보기)
+  // 오늘 추천(서버 계산, 화면과 같은 shared/recommend.js) + 지금 보낼 알림
   app.get('/api/plan', async (req, res) => {
     try {
-      const { now: n, plan, live, alarms } = await planFor(store.user(req.userId), provider, now());
-      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, source: live.source, provider: live.provider ?? live.source, reason: live.reason ?? null, plan, alarmsDue: alarms });
+      const { now: n, rec, live, alarms, mockData } = await planFor(store.user(req.userId), provider, now());
+      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, source: live?.source ?? null, reason: live?.reason ?? null, reasonText: live?.reasonText ?? '', stale: Boolean(live?.stale), mockData, rec, trips: live?.trips ?? [], alarmsDue: alarms });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

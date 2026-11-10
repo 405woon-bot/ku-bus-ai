@@ -1,57 +1,61 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { decideAlarms } from '@shared/departure.js';
+import { decideAlarms } from '@shared/recommend.js';
 import { showSystemNotification } from '../lib/platform.js';
 
-/**
- * 계획(plan)과 현재 시각으로 알림을 판정해 ① 시스템 알림(Web Notification) ② 화면 팝업을 띄웁니다.
- * 같은 날·같은 수업·같은 종류의 알림은 한 번만(지연 악화는 3분 늘 때마다) 보냅니다.
- */
+const SEVERITY = { danger: 2, warn: 1 };
+/** 예시(모의) 데이터로 계산한 알림에 붙이는 출처 표시 — 서버 푸시와 같은 문구 */
 export const MOCK_NOTE = ' (예시 교통 데이터 기준 · 실시간 아님)';
 
 /**
- * @param {object} p
- * @param {boolean} [p.mockFallback] (api 모드) 서울시 대신 예시 데이터로 계산된 계획 → 알림 본문에 출처를 밝히고,
- *   기록 키를 따로 써서 실시간 데이터가 돌아오면 알림을 다시 판단합니다(서버 스케줄러와 같은 규칙).
+ * 추천 결과로 알림 판정 → 시스템 알림(Web Notification) + 화면 알림.
+ * - 같은 날·같은 수업·같은 종류는 한 번만
+ * - 한 번에 여러 개가 걸리면(예: 출발 10분 전 + 빠듯) 하나로 합쳐서 보냄
+ * - 지난 출발 시각에 대한 알림은 화면에서 자동으로 치움
+ * - mockData: 서울시 실시간 대신 예시 데이터로 계산한 추천 → 본문에 출처를 밝히고 따로 기록(실시간이 돌아오면 다시 알림)
  */
-export function useAlarms({ plan, now, fired, dispatch, enabled, mockFallback = false }) {
+export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false }) {
   const [toasts, setToasts] = useState([]);
-  const snoozes = useRef([]); // { atMin, toast }
-  const sent = useRef(new Set()); // 개발 모드(StrictMode) 이중 실행에도 한 번만 보내도록
-  const minuteKey = Math.floor(now.minutes * 4); // 15초 단위로 판정
+  const sent = useRef(new Set());
+  const snoozes = useRef([]);
+  const qKey = Math.floor(now.minutes * 4);
 
-  const push = useCallback(async (a, key) => {
-    const system = await showSystemNotification({ title: a.title, body: a.body, tag: `${key}:${a.type}` });
-    // 실시간 알림이 오면 예시 데이터로 띄웠던 팝업은 치움
-    setToasts((ts) => [{ ...a, id: `${key}:${a.type}:${Date.now()}`, system, atMin: now.minutes }, ...ts.filter((t) => t.body !== a.body && !(t.mock && !a.mock))].slice(0, 2));
-  }, [now.minutes]);
+  const show = useCallback(async (a, tag) => {
+    const id = `${tag}:${Date.now()}`;
+    setToasts([{ ...a, id }]); // 화면에는 가장 최근 것 하나만
+    showSystemNotification({ title: a.title, body: a.body, tag });
+  }, []);
 
   useEffect(() => {
-    if (!plan || !enabled) return;
-    const key = `${now.dateKey}:${plan.cls.id}${mockFallback ? ':mock' : ''}`;
-    for (const d of decideAlarms({ plan, nowMin: now.minutes, fired: fired[key] || {} })) {
-      const a = mockFallback ? { ...d, body: `${d.body}${MOCK_NOTE}`, mock: true } : d;
-      const sig = `${key}:${a.type}:${a.type === 'worse' ? a.delayMin : ''}`;
+    // 지난 출발 시각 알림 치우기
+    setToasts((ts) => { const keep = ts.filter((t) => t.departMin == null || t.departMin >= now.minutes - 1); return keep.length === ts.length ? ts : keep; });
+    if (!prefs.notify || !rec || rec.state !== 'ok') return;
+    const key = `${now.dateKey}:${rec.cls.id}${mockData ? ':mock' : ''}`;
+    const fresh = [];
+    for (const d of decideAlarms({ rec, nowMin: now.minutes, fired: fired[key] || {}, notifyBeforeMin: prefs.notifyBeforeMin })) {
+      const a = mockData ? { ...d, body: `${d.body}${MOCK_NOTE}`, mock: true } : d;
+      const sig = `${key}:${a.type}:${a.type === 'earlier' ? Math.round(a.departMin) : ''}`;
       if (sent.current.has(sig)) continue;
       sent.current.add(sig);
-      dispatch({ type: 'alarmFired', key, alarm: { type: a.type, delayMin: a.delayMin, atMin: now.minutes, title: a.title, body: a.body, level: a.level, mock: Boolean(a.mock) } });
-      push(a, key);
+      dispatch({ type: 'alarmFired', key, alarm: { type: a.type, departMin: a.departMin, atMin: now.minutes, title: a.title, mock: Boolean(a.mock) } });
+      fresh.push(a);
     }
-    // 다시 알림(스누즈)
+    if (fresh.length) {
+      const main = fresh.find((a) => a.type === 'depart') || fresh.find((a) => a.type === 'earlier') || fresh[0];
+      const tone = fresh.reduce((t, a) => ((SEVERITY[a.tone] || 0) > (SEVERITY[t] || 0) ? a.tone : t), main.tone);
+      show({ ...main, tone }, `${key}:${main.type}`);
+    }
     const due = snoozes.current.filter((s) => now.minutes >= s.atMin);
     if (due.length) {
       snoozes.current = snoozes.current.filter((s) => now.minutes < s.atMin);
-      due.forEach((s) => push({ ...s.toast, title: `다시 알림 · ${s.toast.title}` }, 'snooze'));
+      const last = due[due.length - 1].toast;
+      if (last.departMin == null || last.departMin >= now.minutes - 1) show({ ...last, title: `다시 알림 · ${last.title.replace(/^다시 알림 · /, '')}` }, 'snooze');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan, minuteKey, enabled, now.dateKey, mockFallback]);
+  }, [rec, qKey, prefs.notify, prefs.notifyBeforeMin, now.dateKey, mockData]);
 
-  // 데모 시각을 옮기면(날짜 키가 바뀌면) 이전 팝업은 정리
   useEffect(() => { setToasts([]); snoozes.current = []; }, [now.dateKey]);
   const dismiss = useCallback((id) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
-  const snooze = useCallback((t, minutes = 5) => { snoozes.current.push({ atMin: now.minutes + minutes, toast: t }); dismiss(t.id); }, [now.minutes, dismiss]);
-  const preview = useCallback(() => {
-    if (!plan) return;
-    push({ type: 'preview', level: plan.level, title: `미리 보기 · ${plan.primary.no}번 ${plan.delayed ? `+${plan.primary.delayMin}분 지연` : '정상 운행'}`, body: plan.message }, 'preview');
-  }, [plan, push]);
-  return { toasts, dismiss, snooze, preview };
+  const snooze = useCallback((t) => { snoozes.current.push({ atMin: now.minutes + 5, toast: t }); dismiss(t.id); }, [now.minutes, dismiss]);
+  const test = useCallback(() => show({ type: 'test', tone: 'ok', title: '테스트 알림', body: '출발 시각이 되면 이렇게 알려 드려요.' }, 'test'), [show]);
+  return { toasts, dismiss, snooze, test };
 }

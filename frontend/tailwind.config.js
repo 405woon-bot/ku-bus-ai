@@ -3,6 +3,8 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // 세로가 짧은 화면(휴대폰 가로 바·작은 기기): 홈 3요소가 한 화면에 들어오도록 간격을 줄임
+      screens: { short: { raw: '(max-height: 700px)' } },
       colors: {
         primary: { DEFAULT: '#206DEF', active: '#0057CD', soft: '#EDF3FE', line: '#C7DAFB' },
         bus: { DEFAULT: '#4A92EB', soft: '#E9F2FD' },
@@ -17,6 +19,10 @@ export default {
         warn: { DEFAULT: '#A35F00', soft: '#FFF3DD' },
         danger: { DEFAULT: '#D0342C', soft: '#FDECEB' },
         branch: '#3E9B4F',
+        // 정체·도착 상태 신호(초록·노랑·빨강)
+        go: { DEFAULT: '#1E7B45', soft: '#E6F4EC', dot: '#2FA45A' },
+        caution: { DEFAULT: '#7A5600', soft: '#FFF5D1', dot: '#F2B705' },
+        stop: { DEFAULT: '#C2302A', soft: '#FDECEB', dot: '#E5483B' },
       },
       fontFamily: {
         sans: ['"IBM Plex Sans KR"', '"Apple SD Gothic Neo"', '"Malgun Gothic"', '"Noto Sans KR"', '"Noto Sans CJK KR"', 'system-ui', 'sans-serif'],

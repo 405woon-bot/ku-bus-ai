@@ -20,6 +20,14 @@ export const IconCheck = I(<path d="m5 12.5 4.5 4.5L19 7.5" />);
 export const IconX = I(<path d="M6 6l12 12M18 6 6 18" />);
 export const IconSwap = I(<><path d="M7 4 4 7l3 3M4 7h12M17 20l3-3-3-3M20 17H8" /></>);
 export const IconExternal = I(<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />);
+export const IconHome = I(<><path d="m3.5 11 8.5-7 8.5 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5.5h4V20" /></>);
+export const IconCalendar = I(<><rect x="3.5" y="5" width="17" height="15.5" rx="2.5" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>);
+export const IconPin = I(<><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" /><circle cx="12" cy="10" r="2.4" /></>);
+export const IconSearch = I(<><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></>);
+export const IconLocate = I(<><circle cx="12" cy="12" r="6.5" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" /><circle cx="12" cy="12" r="2" /></>);
+export const IconChevron = I(<path d="m9.5 5.5 6.5 6.5-6.5 6.5" />);
+export const IconReplay = I(<><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" /><path d="M4.5 4.5v4h4" /></>);
+export const IconStop = I(<><rect x="6" y="3" width="12" height="10" rx="2" /><path d="M12 13v8M9 21h6M9 7h6" /></>);
 export const IconSettings = I(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z" /></>);
 
 /* ── 기본 요소 ── */
@@ -59,21 +67,24 @@ export function SampleTag({ children = '예시 데이터' }) {
   return <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-dashed border-ink-muted px-2 text-xs font-semibold text-ink-muted">{children}</span>;
 }
 /**
- * 데이터 출처 배지: 서울시 실시간(청색) / 예시 데이터(점선) + 폴백 이유
+ * 데이터 출처 배지: 서울시 실시간(청색 실선) / 예시 데이터(점선) + 예시로 바뀐 이유
  * @param {{ source?: 'seoul'|'mock'|string, reason?: string|null, stale?: boolean }} p
  */
 export function SourceTag({ source, reason, stale }) {
   if (source === 'seoul') {
     return (
-      <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-2 text-xs font-bold text-white" data-source="seoul">
+      <span data-source="seoul" className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-2 text-xs font-bold text-white">
         <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden="true" />서울시 실시간{stale ? ' · 잠시 전 값' : ''}
       </span>
     );
   }
   const why = reason && reason !== 'demo' ? reasonText(reason) : '';
-  return <span data-source="mock" title={why ? `실시간 대신 예시 데이터를 보여 주는 이유: ${why}` : '예시(모의) 데이터 — 실제 서울시 정보가 아닙니다'}><SampleTag>{why ? `예시 데이터 · ${why}` : '예시 데이터'}</SampleTag></span>;
+  return (
+    <span data-source="mock" title={why ? `실시간 대신 예시 데이터를 보여 주는 이유: ${why}` : '예시 데이터 — 실제 서울시 정보가 아닙니다'}>
+      <SampleTag>{why ? `예시 데이터 · ${why}` : '예시 데이터'}</SampleTag>
+    </span>
+  );
 }
-
 export function RouteBadge({ route, size = 'md' }) {
   const s = size === 'lg' ? 'h-9 min-w-[52px] text-lg' : size === 'sm' ? 'h-6 min-w-[38px] text-[13px]' : 'h-7 min-w-[44px] text-[15px]';
   return <span className={`num inline-grid place-items-center rounded-md px-2 font-bold text-white ${s}`} style={{ background: routeColor(route.type) }}>{route.no}</span>;
