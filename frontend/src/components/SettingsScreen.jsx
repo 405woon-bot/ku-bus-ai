@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import { Button, Chip, IconChevron, IconCube, IconExternal, IconStop, SourceTag } from './ui.jsx';
+import PushPanel from './PushPanel.jsx';
 
 function Group({ title, children, note }) {
   const id = useId();
@@ -78,8 +79,20 @@ function explainStatus(mode, live, h) {
   const min = Math.round((h.cacheSec || 300) / 60);
   const aiSeen = (live?.trips || []).some((t) => t.explain?.source === 'gemini'); // 상태(1분마다)보다 홈 응답(20초마다)이 먼저 알 때
   return h.lastOkAt || aiSeen
-    ? ['ok', `연결됨 · ${model}`, `막힐 때만, 같은 상황이면 ${min}분 동안 다시 묻지 않아요. 실패하면 기본 안내로 바로 바꿔요. 오늘 ${h.callsToday}번 물어봤어요.`]
+    ? ['ok', `연결됨 · ${model}`, `막힐 때만, 같은 상황이면 ${min}분 동안 다시 묻지 않아요. 실패하면 기본 안내로 바로 바꿔요.${h.callsToday ? ` 오늘 ${h.callsToday}번 물어봤어요.` : ''}`]
     : ['ok', `준비됨 · ${model}`, '아직 AI에 물어본 적이 없어요. 버스가 막히면 물어봐요(주소 끝에 /api/explain/test를 열면 바로 시험).'];
+}
+
+/** 설정 · 서버 저장소 줄: 외부 DB(Upstash)면 서버가 잠들거나 다시 배포돼도 시간표 · 정류장 · 알림 구독이 그대로 */
+function storageStatus(mode, h) {
+  if (mode !== 'api') return ['muted', '미리보기 · 서버 없음', '미리보기는 이 기기에만 저장해요.'];
+  if (!h) return ['muted', '확인 중', '서버 상태를 불러오는 중이에요.'];
+  if (h.kind === 'upstash') {
+    if (h.lastError) return ['danger', '외부 DB · 오류', `${h.lastError.message}${h.loaded ? ' — 잠시 뒤 다시 저장해요.' : ' — 다시 읽는 중이에요. 그동안은 임시로 저장해요.'}`];
+    return h.loaded ? ['ok', '외부 DB · 연결됨', '시간표 · 정류장 · 알림 구독을 외부 DB(Upstash Redis)에 저장해요. 서버가 잠들거나 다시 배포돼도 그대로예요.']
+      : ['muted', '외부 DB · 읽는 중', '외부 DB에서 저장된 내용을 읽는 중이에요.'];
+  }
+  return ['warn', '임시 파일 · 재시작하면 지워짐', 'Render에 UPSTASH_REDIS_REST_URL · UPSTASH_REDIS_REST_TOKEN을 넣으면 외부 DB에 저장해요. 지금은 서버가 잠들면 알림 구독이 지워질 수 있어요.'];
 }
 
 /** 분 단위 선택 칩 */
@@ -107,19 +120,15 @@ const PERM = { granted: '허용됨', denied: '차단됨 — 브라우저 설정�
 
 const SYNC = { synced: ['ok', '서버와 동기화됨(synced)'], error: ['danger', '서버 동기화 오류(error)'], loading: ['muted', '연결 중…'] };
 
-/** 실시간 데이터 출처 · 서버 동기화 · 서버 푸시 상태 */
-function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
+/** 실시간 데이터 출처 · 돌발정보 · 날씨 · AI 설명 · 서버 동기화 · 서버 저장소 상태 */
+function ServerGroup({ mode, live, health, sync }) {
   const src = live?.source ? { source: live.source, reason: live.reason, stale: Boolean(live.stale) || live.status === 'stale' }
     : health?.provider ? { source: health.provider, reason: health.reason } : null;
   const srcDesc = !src ? '탑승 정류장을 고르면 표시돼요'
     : src.source === 'mock' ? '실시간을 받지 못해 예시 데이터로 계산 중이에요. 연결되면 자동으로 바뀌어요.'
       : src.stale ? '서울시 연결이 잠시 끊겨 직전 값을 쓰는 중이에요.' : '서울시 버스 API에서 20초마다 받아요.';
   const [syncLevel, syncText] = mode === 'api' ? (SYNC[sync] || SYNC.loading) : ['muted', '미리보기 · 서버 없음'];
-  const noVapid = mode === 'api' && health?.push && !health.push.enabled;
-  const pushDesc = noVapid ? '서버에 푸시 키(VAPID)가 설정되지 않아 지금은 켤 수 없어요.'
-    : push.state === 'on' ? `서버에 구독 저장됨${push.count ? `(${push.count}개)` : ''} — 창을 닫아도 알림이 와요.`
-      : push.state === 'error' ? push.message : '창을 닫아도 출발 알림을 받아요.';
-  const label = { off: '서버 푸시 켜기', working: '켜는 중…', on: '다시 등록', error: '다시 시도' }[push.state] || '서버 푸시 켜기';
+  const [stLevel, stText, stDesc] = storageStatus(mode, health?.storage);
   const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents);
   const [wxLevel, wxText, wxDesc] = weatherStatus(mode, live?.weather, health?.weather);
   const [aiLevel, aiText, aiDesc] = explainStatus(mode, live, health?.explain);
@@ -140,18 +149,14 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
       <Item label="서버 동기화" desc="시간표·정류장·설정을 서버에 저장해요. 서버가 이 값으로 알림을 계산해요.">
         <Chip level={syncLevel}>{syncText}</Chip>
       </Item>
-      <Item label="서버 푸시" desc={pushDesc}>
-        <div className="flex flex-wrap items-center gap-2" data-testid="push-panel">
-          {push.state === 'on' && <Chip level="ok">서버 푸시 켜짐(synced)</Chip>}
-          {push.state === 'error' && <Chip level="danger">서버 푸시 오류(error)</Chip>}
-          <Button size="sm" variant={push.state === 'off' ? 'primary' : 'default'} disabled={noVapid || push.state === 'working'} onClick={onEnablePush}>{label}</Button>
-        </div>
+      <Item label="서버 저장소" desc={stDesc}>
+        <span data-testid="storage-status"><Chip level={stLevel}>{stText}</Chip></span>
       </Item>
     </Group>
   );
 }
 
-export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, push, onEnablePush, sync, live, health }) {
+export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, health }) {
   const { prefs } = state;
   const setPrefs = (patch) => dispatch({ type: 'setPrefs', patch });
   const [confirmReset, setConfirmReset] = useState(false);
@@ -175,7 +180,7 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
       <Group title="알림">
         <Item label="출발 알림" desc="출발 시각 전, 출발이 앞당겨질 때, 지각 위험일 때"><Switch label="출발 알림" checked={prefs.notify} onChange={(v) => setPrefs({ notify: v })} /></Item>
         {prefs.notify && <Item label="출발 몇 분 전에"><MinuteChips label="출발 몇 분 전에 알릴지" value={prefs.notifyBeforeMin} options={[5, 10, 15]} onChange={(m) => setPrefs({ notifyBeforeMin: m })} /></Item>}
-        <Item label="브라우저 알림" desc={PERM[perm] || perm}>
+        <Item label="앱을 연 동안 알림" desc={`화면 위에 띄우는 알림 · ${PERM[perm] || perm}`}>
           <div className="flex gap-2">
             {perm === 'default' && <Button size="sm" variant="primary" onClick={onRequestPerm}>허용하기</Button>}
             <Button size="sm" onClick={onTestAlarm}>테스트</Button>
@@ -183,7 +188,9 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
         </Item>
       </Group>
 
-      <ServerGroup mode={mode} live={live} health={health} sync={sync} push={push} onEnablePush={onEnablePush} />
+      <PushPanel info={info} push={push} onOpenGuide={onOpenGuide} prefsNotify={prefs.notify} />
+
+      <ServerGroup mode={mode} live={live} health={health} sync={sync} />
 
       <Group title="정보">
         {mode === 'sample' && (

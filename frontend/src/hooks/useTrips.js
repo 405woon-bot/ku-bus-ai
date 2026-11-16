@@ -18,6 +18,8 @@ export const PREVIEW_INCIDENTS = { all: '공사+행사', campus: '행사만', no
 export const PREVIEW_WEATHER = { rain: '비', snow: '눈', clear: '맑음' };
 /** 미리보기에서 고르는 '왜 늦나요?' 모양(예시 문장 · 실제 AI 응답 아님) */
 export const PREVIEW_EXPLAIN = { ai: 'AI 문장', rule: '기본 안내' };
+/** 미리보기에서 고르는 가상 기기(아이폰 홈 화면 추가 안내 · 백그라운드 알림 화면 확인용) */
+export const PREVIEW_DEVICES = { pc: 'PC', safari: '아이폰 Safari', app: '아이폰 앱', inapp: '카카오톡' };
 
 /**
  * 탑승 정류장 → 국민대행 노선별 실시간 도착·차내 시간·정체.

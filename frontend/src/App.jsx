@@ -7,7 +7,10 @@ import { useTrips } from './hooks/useTrips.js';
 import { useAlarms } from './hooks/useAlarms.js';
 import { useServerSync } from './hooks/useServerSync.js';
 import { notifyPermission, requestNotifyPermission } from './lib/platform.js';
-import { api, enableServerPush } from './lib/api.js';
+import { api } from './lib/api.js';
+import { deviceInfo, previewDevice } from './lib/device.js';
+import { attachHandoffToUrl } from './lib/identity.js';
+import { usePush } from './hooks/usePush.js';
 import { colorIndexFor } from './lib/palette.js';
 import { courseToClasses } from '@shared/courses.js';
 import { Header, PreviewBar, TabBar, TABS } from './components/AppShell.jsx';
@@ -18,6 +21,7 @@ import StopPicker from './components/StopPicker.jsx';
 import ClassDialog from './components/ClassDialog.jsx';
 import ImportDialog from './components/ImportDialog.jsx';
 import AlarmToasts from './components/AlarmToasts.jsx';
+import { InstallBar, InstallSheet } from './components/InstallGuide.jsx';
 
 const readTab = () => { try { const h = window.location.hash.slice(1); return TABS.some((t) => t.id === h) ? h : 'home'; } catch { return 'home'; } };
 
@@ -57,7 +61,26 @@ function nextSchoolDay(classes, weekday) {
   return null;
 }
 
-export default function App() {
+// '홈 화면에 추가' 안내 한 줄을 닫으면 7일 동안 숨김(이 기기에만 저장)
+const DISMISS_KEY = 'kubusai:install:until';
+const readDismissed = () => { try { return Number(localStorage.getItem(DISMISS_KEY) || 0) > Date.now(); } catch { return false; } };
+const writeDismissed = () => { try { localStorage.setItem(DISMISS_KEY, String(Date.now() + 7 * 86400_000)); } catch { /* 저장 불가 환경 */ } };
+
+/**
+ * 아이폰 Safari(설치 전)에서: 주소에 '이어받기 코드'를 붙여 둠 → 그 주소 그대로 홈 화면에 추가되면
+ * 홈 화면 앱이 처음 열릴 때 같은 사용자(정류장 · 시간표)로 이어짐. 1시간마다 새로 받음(코드는 2시간 · 한 번만)
+ */
+function useHandoffLink(enabled) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const run = () => attachHandoffToUrl().catch(() => {});
+    run();
+    const id = setInterval(run, 60 * 60_000);
+    return () => clearInterval(id);
+  }, [enabled]);
+}
+
+export default function App({ handoff = null }) {
   const [state, dispatch] = useAppState();
   const sync = useServerSync(state, dispatch, MODE === 'api');
   const [tab, go] = useTab();
@@ -84,19 +107,21 @@ export default function App() {
   const alarms = useAlarms({ rec, now, fired: state.fired, dispatch, prefs: state.prefs, mockData });
 
   const [perm, setPerm] = useState(notifyPermission);
-  // 서버 푸시: off → working → on(synced) | error
-  const [push, setPush] = useState({ state: 'off' });
-  useEffect(() => { if (sync.pushSubscriptions > 0) setPush((p) => (p.state === 'off' ? { state: 'on', count: sync.pushSubscriptions } : p)); }, [sync.pushSubscriptions]);
-  const enablePush = async () => {
-    setPush({ state: 'working' });
-    try {
-      if (MODE !== 'api') throw new Error('미리보기에는 서버가 없어 켤 수 없어요');
-      await enableServerPush();
-      const me = await api.me();
-      setPush({ state: 'on', count: me.pushSubscriptions });
-    } catch (e) { setPush({ state: 'error', message: e.message }); }
-    setPerm(notifyPermission());
-  };
+  // 기기 구분(미리보기는 '기기 보기' 단추로 고른 가상 기기) → 백그라운드 알림 · 아이폰 홈 화면 추가 안내
+  const previewKind = state.preview.device || 'pc';
+  const info = useMemo(() => (MODE === 'sample' ? previewDevice(previewKind) : deviceInfo()), [previewKind]);
+  const push = usePush({ mode: MODE, info });
+  useEffect(() => { setPerm(notifyPermission()); }, [push.state]);
+  const [guide, setGuide] = useState(false);
+  const [dismissed, setDismissed] = useState(readDismissed);
+  useEffect(() => { if (MODE === 'sample') setDismissed(false); }, [previewKind]);
+  const hasSetup = Boolean(state.stop || state.classes.length);
+  const showBar = tab === 'home' && info.needsInstall && Boolean(state.stop) && !dismissed && !guide;
+  const later = () => { writeDismissed(); setDismissed(true); setGuide(false); };
+  useHandoffLink(MODE === 'api' && info.needsInstall && sync.status === 'synced' && hasSetup);
+  // 홈 화면 앱이 처음 열려 설정을 이어받았으면 잠깐 알림
+  const [handoffToast, setHandoffToast] = useState(Boolean(handoff?.claimed));
+  useEffect(() => { if (!handoffToast) return undefined; const t = setTimeout(() => setHandoffToast(false), 6000); return () => clearTimeout(t); }, [handoffToast]);
 
   const [dialog, setDialog] = useState(null);
   const close = useCallback(() => setDialog(null), []);
@@ -107,7 +132,16 @@ export default function App() {
       <Header tab={tab} onTab={go} now={now} />
       {MODE === 'sample' && <PreviewBar preview={state.preview} dispatch={dispatch} />}
 
-      <main className={`gutter mx-auto pb-[calc(96px+env(safe-area-inset-bottom,0px))] pt-4 short:pt-3 md:pb-14 md:pt-8 ${tab === 'timetable' ? 'max-w-[1160px]' : 'max-w-[960px]'}`}>
+      {handoffToast && (
+        <div role="status" data-testid="handoff-toast" className="gutter fixed inset-x-0 top-[calc(64px+env(safe-area-inset-top,0px))] z-40 mx-auto max-w-[560px]">
+          <p className="flex items-center gap-2 rounded-2xl bg-[#13294B] px-3.5 py-2.5 text-[13.5px] font-semibold leading-snug text-white shadow-pop">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#8FE3AE]" aria-hidden="true"><path d="M5 12.5 10 17 19 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            {handoff?.hasData ? 'Safari에서 쓰던 정류장 · 시간표를 그대로 가져왔어요' : 'Safari에서 쓰던 설정을 이어받았어요'}
+          </p>
+        </div>
+      )}
+
+      <main className={`gutter mx-auto ${showBar ? 'pb-[calc(156px+env(safe-area-inset-bottom,0px))] md:pb-24' : 'pb-[calc(96px+env(safe-area-inset-bottom,0px))] md:pb-14'} pt-4 short:pt-3 md:pt-8 ${tab === 'timetable' ? 'max-w-[1160px]' : 'max-w-[960px]'}`}>
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             onPickStop={() => setDialog({ type: 'stop' })} onSelectStop={setStop} onGoTimetable={() => go('timetable')} />
@@ -125,11 +159,13 @@ export default function App() {
         {tab === 'settings' && (
           <SettingsScreen mode={MODE} state={state} dispatch={dispatch} onPickStop={() => setDialog({ type: 'stop' })}
             perm={perm} onRequestPerm={async () => setPerm(await requestNotifyPermission())} onTestAlarm={alarms.test}
-            push={push} onEnablePush={enablePush} sync={sync.status} live={live} health={health} />
+            info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} health={health} />
         )}
       </main>
 
       <TabBar tab={tab} onTab={go} />
+      {showBar && <InstallBar info={info} onOpen={() => setGuide(true)} onClose={later} />}
+      {guide && <InstallSheet info={info} onClose={() => setGuide(false)} onLater={later} />}
       <AlarmToasts toasts={alarms.toasts} onDismiss={alarms.dismiss} onSnooze={alarms.snooze} />
 
       {dialog?.type === 'stop' && <StopPicker mode={MODE} onSelect={setStop} onClose={close} />}

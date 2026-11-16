@@ -16,5 +16,7 @@ export default defineConfig(({ mode }) => ({
   },
   server: { fs: { allow: ['..'] }, proxy: { '/api': 'http://localhost:8787' } },
   define: { __DATA_MODE__: JSON.stringify(mode === 'preview' ? 'sample' : 'api') },
+  // 미리보기(단일 HTML)에는 서비스 워커 · 매니페스트 · 아이콘(public/)이 필요 없음
+  publicDir: mode === 'preview' ? false : 'public',
   build: { outDir: mode === 'preview' ? 'dist-preview' : 'dist', assetsInlineLimit: 100000000 },
 }));

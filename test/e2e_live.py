@@ -12,10 +12,18 @@ CLASS = {'name': '자료구조', 'day': 0, 'start': '09:00', 'end': '10:15', 'bu
 res = []
 def check(n, c, d=''): res.append(('PASS' if c else 'FAIL') + f' {n} {d}')
 PUSH_STUB = """
-  PushManager.prototype.getSubscription = async function () { return null; };
-  PushManager.prototype.subscribe = async function () {
-    return { endpoint: 'https://push.example.invalid/e2e', toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'BOrE2Ep256dhKey', auth: 'e2eAuth' } }; } };
-  };"""
+  (function () {
+    var KEY = '__e2e_push_sub';
+    function make() { return { endpoint: 'https://push.example.invalid/e2e', options: { applicationServerKey: null },
+      toJSON: function () { return { endpoint: this.endpoint, keys: { p256dh: 'BOrE2Ep256dhKey', auth: 'e2eAuth' } }; },
+      unsubscribe: async function () { try { localStorage.removeItem(KEY); } catch (e) {} return true; } }; }
+    // 헤드리스 크롬은 권한을 줘도 Notification.permission이 'denied'로 보이는 문제가 있어(실제 브라우저와 다름) 허용 상태로 맞춤
+    try { if (typeof Notification !== 'undefined') Object.defineProperty(Notification, 'permission', { get: function () { return 'granted'; }, configurable: true }); } catch (e) {}
+    if (typeof PushManager !== 'undefined') {
+      PushManager.prototype.getSubscription = async function () { try { return localStorage.getItem(KEY) ? make() : null; } catch (e) { return null; } };
+      PushManager.prototype.subscribe = async function () { try { localStorage.setItem(KEY, '1'); } catch (e) {} return make(); };
+    }
+  })();"""
 hhmm = lambda m: f'{int(m // 60):02d}:{int(m % 60):02d}'
 flat = lambda s: re.sub(r'\s+', ' ', s).strip()
 
@@ -111,10 +119,33 @@ with sync_playwright() as p:
     check('설정: 날씨(기상청) 연결됨 · 08:00 관측', wxs == '연결됨 · 08:00 관측' and pg.get_by_text('국민대 격자(60 · 128)').count() == 1, wxs)
     ais = flat(pg.locator('[data-testid="explain-status"]').inner_text())
     check('설정: AI 설명(Gemini) 연결됨 · gemini-3.5-flash-lite', ais == '연결됨 · gemini-3.5-flash-lite' and pg.get_by_text('AI 설명(Gemini)').count() == 1, ais)
-    pg.get_by_role('button', name='서버 푸시 켜기').click()
-    pg.wait_for_selector('text=서버 푸시 켜짐(synced)', timeout=10000)
-    check('서버 푸시 켜기 → synced + 서버에 구독 1개', api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1)
+    sts = flat(pg.locator('[data-testid="storage-status"]').inner_text())
+    check('설정: 서버 저장소 = 외부 DB · 연결됨(가짜 Upstash)', sts == '외부 DB · 연결됨', sts)
+    panel = pg.locator('[data-testid="push-panel"]')
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="off"]', timeout=8000)
+    check('백그라운드 알림: 처음에는 꺼짐(알림 켜기)', panel.get_by_role('button', name='알림 켜기').count() == 1)
+    panel.get_by_role('button', name='알림 켜기').click()
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="on"]', timeout=10000)
+    st_txt = flat(pg.locator('[data-testid="push-status"]').inner_text())
+    check('알림 켜기 → 서버에 구독 1개 · 실제로 받기 전에는 \'켜짐 · 확인 필요\'', st_txt == '켜짐 · 확인 필요' and api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1, st_txt)
+    panel.get_by_role('button', name='테스트 알림 보내기').click()
+    pg.wait_for_selector('[data-testid="push-panel"][data-confirmed="1"]', timeout=15000)
+    st_txt = flat(pg.locator('[data-testid="push-status"]').inner_text())
+    check('테스트 알림 → (가짜 휴대폰이 받음) → 수신 확인됨 · 시각', st_txt.startswith('수신 확인됨 · '), st_txt)
+    status = api(ctx, 8801, uid, 'POST', '/api/push/status', {'endpoint': 'https://push.example.invalid/e2e'})
+    check('API: /api/push/status — 이 기기 ackAt · 마지막 테스트 ackAt', bool(status['device']['ackAt']) and bool(status['lastTest']['ackAt']), str(status)[:200])
     pg.screenshot(path=str(OUT / 'live_desktop_settings.png'), full_page=True)
+    # 앱을 다시 열면: 구독을 확인(서버가 이미 앎) → 그대로 수신 확인됨
+    pg.reload(); pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=8000)
+    pg.wait_for_selector('[data-testid="push-panel"][data-confirmed="1"]', timeout=10000)
+    check('다시 열기: 구독 확인 · 수신 확인됨 유지', pg.locator('[data-testid="push-panel"][data-state="on"]').count() == 1)
+    # 서버가 구독을 잃어버렸다면(예전처럼 서버 재시작 등) → 앱을 열 때 자동 재등록
+    api(ctx, 8801, uid, 'POST', '/api/push/unsubscribe', {'endpoint': 'https://push.example.invalid/e2e'})
+    pg.reload(); pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=8000)
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="on"]', timeout=10000)
+    ptxt = flat(panel.inner_text())
+    check('서버에서 구독이 사라져도 → 앱을 열면 자동 재등록(다시 확인 필요)', '방금 자동으로 다시 등록했어요' in ptxt and '켜짐 · 확인 필요' in ptxt
+          and api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1, ptxt)
 
     # 시간표: 수업 검색(서버 /api/courses) → 추가 → 서버에 강의 묶음 번호와 함께 저장
     pg.get_by_role('link', name='시간표').first.click()
@@ -145,6 +176,50 @@ with sync_playwright() as p:
     why = pg.locator('[data-testid="why-strip"]')
     check('[iPhone 13] 왜 늦나요? 두 줄 안(줄임) · +11분', why.bounding_box()['height'] <= 64 and '+11분' in why.inner_text(), f"h={why.bounding_box()['height']:.1f}")
     pg.screenshot(path=str(OUT / 'live_iphone13_home.png'))
+    bar = pg.locator('[data-testid="install-bar"]')
+    check('[iPhone Safari] 홈 화면 추가 안내 한 줄(탭 바 위에 떠 있음)', bar.count() == 1 and '홈 화면에 추가하고 알림 받기' in bar.inner_text()
+          and bar.bounding_box()['y'] + bar.bounding_box()['height'] <= tab['y'], flat(bar.inner_text()) if bar.count() else 'none')
+    token = None
+    for _ in range(40):
+        m = re.search(r'[?&]h=([\w-]+)', pg.url)
+        if m: token = m.group(1); break
+        pg.wait_for_timeout(100)
+    check('[iPhone Safari] 주소에 이어받기 코드(?h=…)를 붙여 둠', bool(token), pg.url)
+    bar.get_by_role('button', name='방법 보기').click()
+    sheet = pg.locator('[data-testid="install-sheet"]'); sheet.wait_for(timeout=5000)
+    stx = flat(sheet.inner_text())
+    check('[iPhone Safari] 방법 보기: 공유 → 홈 화면에 추가 → 홈 화면 아이콘 → 알림 켜기 · 설정 이어짐', '홈 화면에 추가하기' in stx and '공유' in stx and '홈 화면에 추가' in stx
+          and '알림 켜기' in stx and '그대로 이어져요' in stx, stx)
+    pg.screenshot(path=str(OUT / 'live_iphone13_install_sheet.png'))
+    sheet.get_by_role('button', name='알겠어요').click()
+    pg.get_by_role('button', name='안내 닫기(7일 동안)').click()
+    pg.reload(); pg.wait_for_selector('[data-testid="data-line"] [data-source="seoul"]', timeout=10000); pg.wait_for_timeout(500)
+    check('[iPhone Safari] ×로 닫으면 다시 열어도 안 보임(7일)', pg.locator('[data-testid="install-bar"]').count() == 0)
+    pg.evaluate("location.hash = '#settings'")
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="need-install"]', timeout=8000)
+    check('[iPhone Safari] 설정: 홈 화면 앱에서만 알림 → 방법 보기', pg.locator('[data-testid="push-panel"]').get_by_role('button', name='방법 보기').count() == 1)
+    ctx.close()
+
+    # ④ 홈 화면 앱(standalone)으로 처음 열기: 저장 공간이 비어 있어도 이어받기 코드로 같은 사용자 · 같은 정류장
+    ctx = b.new_context(**p.devices['iPhone 13'])
+    ctx.grant_permissions(['notifications'], origin='http://localhost:8801')
+    ctx.add_init_script("Object.defineProperty(navigator, 'standalone', { get: function () { return true; } });" + PUSH_STUB)
+    pg = ctx.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=T0); pg.goto(f'http://localhost:8801/?h={token}#home')
+    toast = pg.locator('[data-testid="handoff-toast"]'); toast.wait_for(timeout=10000)
+    check('[홈 화면 앱] 처음 열면: Safari에서 쓰던 정류장 · 시간표를 가져왔어요', 'Safari에서 쓰던 정류장 · 시간표를 그대로 가져왔어요' in toast.inner_text(), flat(toast.inner_text()))
+    pg.wait_for_selector('[data-testid="data-line"] [data-source="seoul"]', timeout=10000)
+    same = pg.evaluate("localStorage.getItem('kubusai:user')")
+    check('[홈 화면 앱] 같은 사용자 · 같은 정류장 · 주소에서 코드는 지움 · 안내 줄 없음', same == uid and '정릉시장' in pg.locator('main').inner_text()
+          and 'h=' not in pg.url and pg.locator('[data-testid="install-bar"]').count() == 0, f'{same} {pg.url}')
+    pg.screenshot(path=str(OUT / 'live_iphone13_standalone_home.png'))
+    pg.evaluate("location.hash = '#settings'")
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="off"]', timeout=8000)
+    check('[홈 화면 앱] 설정: 알림 켜기(버튼을 눌러야 허용을 물음)', pg.locator('[data-testid="push-panel"]').get_by_role('button', name='알림 켜기').count() == 1)
+    again = api(ctx, 8801, 'x', 'POST', '/api/handoff/claim', {'token': token})
+    check('[이어받기] 쓴 코드는 다시 못 씀(410)', 'error' in again and '이미' in again['error'], str(again))
+    check('[홈 화면 앱] 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
 
     # ③ 키 없는 서버: 정류장 검색은 이유 안내, 고른 정류장은 예시 데이터(점선) + 이유, 서버 푸시는 VAPID 없음
@@ -172,8 +247,10 @@ with sync_playwright() as p:
     check('키 없음: 추천 버스가 원활(1112)이면 \'왜 늦나요?\' 없이 지난번 경로 주변 줄', pg.locator('[data-testid="why-strip"]').count() == 0)
     pg.screenshot(path=str(OUT / 'nokey_desktop_home.png'))
     pg.get_by_role('link', name='설정').first.click()
-    pg.get_by_role('button', name='서버 푸시 켜기').wait_for(timeout=5000)
-    check('키 없음: 서버 푸시 키(VAPID) 없음 안내', pg.get_by_text('VAPID').count() >= 1)
+    pg.wait_for_selector('[data-testid="push-panel"][data-state="no-vapid"]', timeout=8000)
+    check('키 없음: 백그라운드 알림 = 서버 키 없음 + VAPID 안내', '서버 키 없음' in pg.locator('[data-testid="push-panel"]').inner_text() and pg.get_by_text('VAPID').count() >= 1)
+    sts = flat(pg.locator('[data-testid="storage-status"]').inner_text())
+    check('키 없음: 서버 저장소 = 임시(재시작하면 지워짐) + Upstash 안내', sts == '임시 파일 · 재시작하면 지워짐' and pg.get_by_text('UPSTASH_REDIS_REST_URL').count() >= 1, sts)
     inc = flat(pg.locator('[data-testid="incident-status"]').inner_text())
     check('키 없음: 설정 돌발정보 = 예시 데이터 + 키 없음 안내', inc == '예시 데이터' and pg.get_by_text('SEOUL_ACCIDENT_API_KEY도 없어요').count() == 1, inc)
     wxs = flat(pg.locator('[data-testid="weather-status"]').inner_text())

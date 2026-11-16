@@ -1,0 +1,17 @@
+{
+  "name": "KU BUS AI",
+  "short_name": "KU BUS",
+  "description": "탑승 정류장 하나로 정체를 반영한 등교 출발 시각과 알림을 알려 주는 국민대학교 버스 앱",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "lang": "ko",
+  "background_color": "#F9F9F9",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

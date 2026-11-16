@@ -2,7 +2,10 @@
 // - 실시간 조회는 첫 수업 3시간 전부터 수업 시작까지만(서울시 API 호출 절약). 같은 정류장은 캐시를 거쳐 한 번만 호출.
 // - 동시에 걸린 알림(예: 출발 10분 전 + 빠듯)은 화면처럼 하나로 합쳐 보냅니다.
 // - 예시(모의) 데이터로 계산된 알림은 본문에 출처를 밝힙니다(PUSH_WHEN_MOCK=skip이면 보내지 않음).
+// - 보낼 때마다 수신 확인 번호를 실어 보내고 기록(pushLog) — 휴대폰 서비스 워커가 '받았음'을 알리면 설정 화면에 '수신 확인됨'
+// - Render 무료 서버는 15분 동안 접속이 없으면 잠들어 이 1분 타이머도 멈춥니다 → cron-job.org가 /api/wake로 깨워 둠(README)
 import { planFor } from './planner.js';
+import { sendAndLog } from './push.js';
 
 export const MOCK_NOTE = ' (예시 교통 데이터 기준 · 실시간 아님)';
 const SEVERITY = { danger: 2, warn: 1 };
@@ -23,13 +26,12 @@ export function createScheduler({ store, provider, pusher, now = () => new Date(
           const main = alarms.find((a) => a.type === 'depart') || alarms.find((a) => a.type === 'earlier') || alarms[0];
           const tone = alarms.reduce((t, a) => ((SEVERITY[a.tone] || 0) > (SEVERITY[t] || 0) ? a.tone : t), main.tone);
           const body = mockData ? `${main.body}${MOCK_NOTE}` : main.body;
-          const gone = await pusher.send(user.push, { title: main.title, body, tag: `${key}:${main.type}`, level: tone, url: '/', source: mockData ? 'mock' : 'seoul' });
+          const r = await sendAndLog(store, userId, pusher, user.push, { title: main.title, body, tag: `${key}:${main.type}`, level: tone, url: '/', source: mockData ? 'mock' : 'seoul' }, { kind: 'alarm', now: now().getTime() });
           store.update(userId, (u) => {
-            u.push = u.push.filter((s) => !gone.includes(s.endpoint));
             const rec = u.fired[key] || (u.fired[key] = {});
             for (const a of alarms) { if (a.type === 'earlier') rec.depart = { departMin: a.departMin }; else rec[a.type] = { departMin: a.departMin }; }
           });
-          sent.push({ userId, types: alarms.map((a) => a.type), title: main.title, body, source: mockData ? 'mock' : 'seoul' });
+          sent.push({ userId, types: alarms.map((a) => a.type), title: main.title, body, source: mockData ? 'mock' : 'seoul', delivered: r?.sent ?? 0 });
         } catch (e) { stats.lastError = e.message; log.warn?.(`[scheduler] ${userId}: ${e.message}`); }
       }
     } finally {

@@ -2,6 +2,8 @@ import { Component, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { clearState } from './lib/platform.js';
+import { MODE } from './hooks/useAppState.js';
+import { bootstrapIdentity } from './lib/identity.js';
 import './index.css';
 
 /** 화면 오류가 나도 빈 화면 대신 안내와 복구 버튼을 보여 줍니다(저장된 데이터가 깨진 경우 등). */
@@ -21,4 +23,8 @@ class ErrorBoundary extends Component {
   }
 }
 
-createRoot(document.getElementById('root')).render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);
+// 홈 화면 앱이 처음 열릴 때: 주소의 이어받기 코드로 Safari에서 쓰던 사용자를 먼저 받아 온 뒤 화면을 그림(최대 6초)
+const boot = MODE === 'api' ? bootstrapIdentity().catch(() => ({})) : Promise.resolve({});
+boot.then((handoff) => {
+  createRoot(document.getElementById('root')).render(<StrictMode><ErrorBoundary><App handoff={handoff} /></ErrorBoundary></StrictMode>);
+});

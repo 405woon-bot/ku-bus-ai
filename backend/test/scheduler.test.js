@@ -13,7 +13,7 @@ function setup({ provider, pushWhenMock = 'label' }) {
   const store = createStore(null);
   store.update('demo', (u) => { u.classes = [CLASS]; u.stop = { arsId: '08901', name: '정릉시장' }; });
   const pushes = [];
-  const pusher = { enabled: true, send: async (_s, p) => { pushes.push(p); return []; } };
+  const pusher = { enabled: true, deliver: async (_s, p) => { pushes.push(p); return { results: [] }; } };
   let t = new Date('2026-11-08T23:10:00Z');
   const s = createScheduler({ store, provider, pusher, now: () => t, pushWhenMock, log: quiet });
   // 서울 월요일 hh:mm

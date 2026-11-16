@@ -4,11 +4,12 @@
 v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)에 v0.3의 서울시 실시간 연동(검증한 응답 해석 · 캐시 · 예시 데이터 전환 · 출처 배지 · 서버 푸시)을 합쳤고,
 v0.5는 시간표 탭에 **수업 검색으로 자동 등록**(수강신청 사이트 공개 강좌조회 → `courses.json`)을 더했습니다.
 
-- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY` · 날씨 `KMA_API_KEY` · AI 설명 `GEMINI_API_KEY`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
+- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY` · 날씨 `KMA_API_KEY` · AI 설명 `GEMINI_API_KEY` · 백그라운드 알림 `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` · 외부 DB `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
 - **경로 주변 돌발정보:** 서울 열린데이터광장 실시간 돌발정보(AccInfo)에서 교통사고 · 공사 · 버스사고 · 기상/재난 · 집회및행사 중 통학 경로 300m · 국민대 1km 안의 것만 홈 화면 버스 카드 아래 한 줄로 보여 줍니다(서버가 5분에 한 번만 받아 나눠 씀). 원인이라고 단정하지 않고 "정체 원인일 수 있어요"라고만 씁니다.
 - **날씨:** 기상청 초단기실황으로 국민대 격자(nx 60 · ny 128)의 강수형태(PTY) · 1시간 강수량(RN1)을 서버가 10분에 한 번만 받습니다(응답 형식은 실제 응답으로 확인). **비 · 눈이 올 때만** 홈 화면 '경로 주변' 줄에 함께 보여 주고, 못 받으면 날씨만 빠지고 앱은 그대로입니다. 확인용 `/api/weather`.
 - **왜 늦나요?(v0.9):** 추천 버스가 **보통 · 혼잡**일 때만 버스 카드 바로 아래(‘경로 주변’ 줄 자리)에 한 줄 설명을 보여 줍니다. 숫자(+N분 · 평균 시속)는 서버가 계산하고, Google Gemini(기본 `gemini-3.5-flash-lite`, `GEMINI_MODEL`로 변경)에는 서버가 확인한 사실(가장 느린 도로 · 느린 정도 · 비/눈 · 진행 중인 경로 주변 돌발정보)만 숫자 없이 넘겨 쉬운 한 문장을 받습니다. 근거가 없으면 AI를 부르지 않고 "특이 지연 원인은 확인되지 않았어요.", 실패 · 한도 초과(429) · 3.5초 초과 · 사실에 없는 원인/숫자가 섞인 문장이면 **기본 안내** 문장으로 바로 바꿉니다. 같은 사실은 5분 동안 서버 메모리에서 재사용. ‘근거’를 누르면 서버 계산 · 느린 도로 · 날씨 · 돌발정보를 펼쳐 보여 줍니다. 확인용 `/api/explain/test`.
-- **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을, "돌발 보기"로 예시 돌발정보(공사+행사 / 행사만 / 없음)를, "날씨 보기"로 예시 날씨(비 / 눈 / 맑음)를, "AI 보기"로 ‘왜 늦나요?’ 모양(AI 문장 / 기본 안내 — 예시 문장이며 실제 AI 응답 아님)을 바꿔 볼 수 있습니다.
+- **백그라운드 알림(v1.0):** 앱을 닫아도 출발 시각에 Web Push 알림이 옵니다. 사용자 기록(시간표 · 정류장 · 설정 · 알림 구독 · 보낸 기록)은 **Upstash Redis**(무료, REST)에 저장해 Render 무료 서버가 잠들거나 다시 배포돼도 그대로입니다. 앱을 열 때마다 이 기기의 구독을 확인해 끊겼으면 자동으로 다시 등록하고, **테스트 알림**이 휴대폰에 실제로 도착하면 서비스 워커가 '받았음'을 알려 설정에 '수신 확인됨'이 뜹니다(그 전까지 '확인 필요'). 아이폰은 **홈 화면에 추가한 앱**에서만 받을 수 있어(iOS 16.4 이상) Safari에서는 아래쪽에 '홈 화면에 추가하고 알림 받기' 안내와 단계별 방법(iOS 26: ⋯ → 공유 / iOS 18 이하: 공유 버튼)을 보여 주고, 홈 화면 앱이 처음 열릴 때 **이어받기 코드**(2시간 · 1회용)로 같은 사용자 · 정류장 · 시간표를 이어 줍니다. Render 무료 서버가 잠들면 알림을 보낼 수 없어서 **cron-job.org**가 평일 05:00~21:50에 10분마다 `/api/wake`를 불러 깨워 둡니다(아래 1-1).
+- **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을, "돌발 보기"로 예시 돌발정보(공사+행사 / 행사만 / 없음)를, "날씨 보기"로 예시 날씨(비 / 눈 / 맑음)를, "AI 보기"로 ‘왜 늦나요?’ 모양(AI 문장 / 기본 안내 — 예시 문장이며 실제 AI 응답 아님)을, "기기 보기"로 PC · 아이폰 Safari(홈 화면 추가 안내) · 아이폰 앱(알림 켜기 · 테스트 알림, 예시) · 카카오톡(Safari로 열기 안내)을 바꿔 볼 수 있습니다.
 - **기술:** React 18.3 · Vite 5.4 · Tailwind CSS 3.4 / Node.js 20.6+ · Express 4.21 · web-push 3.6 / (선택) Redis
 
 > **인증키는 서버 환경 변수(`backend/.env` 또는 Render Environment)에만 둡니다.** 이 패키지의 어떤 파일에도 키가 없고, 화면은 우리 서버(`/api/...`)만 부릅니다.
@@ -55,7 +56,17 @@ cd frontend && npm install && npm run build && npm run build:preview
 ```
 
 - **Render:** 저장소에 `frontend/dist`가 들어 있어야 화면이 보입니다(`.gitignore`에 넣지 마세요). push하면 자동으로 다시 배포됩니다.
-- **서버 푸시:** `npx web-push generate-vapid-keys` 결과를 환경 변수 `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY`에 넣고, 화면 설정 → 서버 푸시 켜기(HTTPS 필요).
+- **백그라운드 알림:** `npx web-push generate-vapid-keys` 결과를 환경 변수 `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY`에, `VAPID_SUBJECT`에 `mailto:내메일`을 넣고, 외부 DB `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN`을 넣은 뒤 화면 설정 → **알림 켜기** → **테스트 알림 보내기**(HTTPS 필요).
+
+### 1-1. 서버 깨우기(cron-job.org, 무료)
+
+Render 무료 서버는 15분 동안 접속이 없으면 잠들고(다시 깨는 데 약 1분), 잠든 동안에는 1분마다 알림 시각을 확인하는 타이머도 멈춥니다. cron-job.org가 10분마다 `/api/wake`를 불러 깨워 둡니다.
+
+| 칸 | 값 |
+|---|---|
+| URL | `https://<서비스 주소>.onrender.com/api/wake` (GET, 인증 없음 · 서버를 깨우기만 함) |
+| 일정 | 사용자 지정(Custom): 요일 월~금 · 시 5~21 · 분 0, 10, 20, 30, 40, 50 · 시간대 **Asia/Seoul** |
+| 참고 | 잠든 서버의 첫 호출은 30초 안에 답하지 못해 '실패'로 남을 수 있어요(서버는 깨어남). 다음 호출부터 성공. 월 약 380시간(평일 17시간 × 22일)으로 Render 무료 750시간 안 |
 
 ### 환경 변수 (`backend/.env.example`)
 
@@ -79,8 +90,9 @@ cd frontend && npm install && npm run build && npm run build:preview
 | `EXPLAIN_CACHE_SEC` | `300` | 같은 사실이면 다시 묻지 않는 시간(초, 180~900) |
 | `GEMINI_MAX_PER_DAY` | `200` | 하루(한국 시각) 최대 호출 수. 넘으면 그날은 기본 안내. 한도 초과(429) 뒤 30분 · 키/모델 오류 뒤 10분 · 그 밖의 실패 뒤 1분 쉼 |
 | `EXPLAIN_WAIT_MS` | `1200` | 화면 응답이 AI를 기다리는 시간. 늦게 온 문장은 캐시에 담겨 몇 초 뒤 갱신 때 나옴 |
-| `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | (없음) | 서버 푸시 |
-| `DATA_FILE` | `./data/db.json` | 사용자 데이터(JSON 파일) |
+| `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | (없음) · (없음) · `mailto:admin@example.com` | 백그라운드 알림(Web Push). 비밀키는 서버에만. 형식이 틀려도 서버는 멈추지 않고 설정 · `/api/health`에 이유 표시. 키를 바꾸면 휴대폰이 앱을 열 때 자동 재등록 |
+| `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN` | (없음) | 외부 DB(Upstash Redis REST). 둘 다 있으면 사용자 기록을 해시 `kubusai:users`에 저장(바뀐 사용자만 0.3초 모아 HSET, 시작할 때 HGETALL). 없으면 아래 파일(Render에서는 잠들면 지워짐) |
+| `DATA_FILE` | `./data/db.json` | 외부 DB가 없을 때의 사용자 데이터(JSON 파일, 로컬 개발용) · 평소 소요시간 기록 폴더 |
 
 ## 2. 화면
 
@@ -105,7 +117,7 @@ cd frontend && npm install && npm run build && npm run build:preview
 ```
 
 - **실시간 실패 시:** 맨 위 점선 안내 "실시간 연결 실패 · 예시 데이터로 표시 중 (이유)", 출발 추천 카드가 점선 회색 "출발 추천 · 예시 데이터 기준", 버스 카드 제목 "버스 도착 (예시)", 배지 [예시 데이터 · 이유].
-- **설정:** 탑승 정류장 · 정류장까지 걷는 시간 · 수업 전 여유 · 출발 알림 · **데이터 · 서버 연결**(실시간 데이터 배지, 서버 동기화 synced/error, 서버 푸시 켜기 synced/error).
+- **설정:** 탑승 정류장 · 정류장까지 걷는 시간 · 수업 전 여유 · 출발 알림 · **알림 · 앱을 닫아도 받기**(알림 켜기 → 켜짐 · 확인 필요 → 테스트 알림 → 수신 확인됨 · 마지막 출발 알림 · 이 기기 알림 끄기 / 아이폰 Safari는 '방법 보기') · **데이터 · 서버 연결**(실시간 데이터 배지 · 돌발정보 · 날씨 · AI 설명 · 서버 동기화 · 서버 저장소 외부 DB/임시).
 - **시간표 탭:** 넓은 화면은 왼쪽 시간표 · 오른쪽 **수업 검색**, 휴대폰은 수업 검색 → 시간표. 검색 결과를 누르면 시간표에 점선으로 미리 보이고(겹치는 칸은 빨강), **추가** → 요일 · 시간 · 건물 · 호실이 그대로 들어갑니다. 넣은 강의는 "추가됨 · 빼기"(모든 요일이 함께 빠짐). 원격처럼 시간이 정해지지 않은 강의는 넣을 수 없다고 안내합니다. 그 밖에 직접 추가(빈 칸 누르기 · 끌기), 텍스트 붙여 넣기, 캡처 이미지 인식(+OCR 베타).
 
 ## 2-1. 강의 목록 만들기 — `tools/fetch_courses.py`
@@ -184,33 +196,41 @@ python tools/fetch_courses.py --raw raw.json                   # 받은 원본�
 | PUT | `/api/me/timetable` · POST `/api/me/timetable/import-text` | 시간표 저장 · 텍스트 해석 |
 | GET | `/api/plan` | 서버 쪽 추천(화면과 같은 계산) + 지금 보낼 알림 |
 | GET | `/api/courses?q=&limit=` · `/api/courses/meta` | 수업 검색(과목명 · 교수명 · 과목번호, 최대 50개) · 강의 목록 정보(학기 · 개수 · 받은 날). 목록이 없으면 503 안내 |
-| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) · 날씨(`weather`: 키 여부 · 격자 · 마지막 관측 · 오류) · AI 설명(`explain`: 키 여부 · 모델 · 오늘 호출 수 · 마지막 문장 · 오류 · 쉬는 시각) |
-| GET/POST | `/api/push/key` · `/api/push/subscribe` | Web Push(VAPID) |
+| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) · 날씨(`weather`: 키 여부 · 격자 · 마지막 관측 · 오류) · AI 설명(`explain`: 키 여부 · 모델 · 오늘 호출 수 · 마지막 문장 · 오류 · 쉬는 시각) · 저장소(`storage`: upstash/file · 읽음 · 사용자 수 · 마지막 저장 · 오류) · 푸시(`push.configError`) |
+| GET | `/api/push/key` | VAPID 공개키 · 켜짐 여부 · 설정 오류 이유 |
+| POST | `/api/push/subscribe` · `/api/push/unsubscribe` | 이 기기 구독 저장(같은 주소면 갱신 → `known`, 앱을 열 때마다 부름) · 지우기 |
+| POST | `/api/push/status` | 이 기기 구독 상태(수신 확인 시각 `device.ackAt`) · 마지막 테스트 · 마지막 출발 알림 |
+| POST | `/api/push/test` | 테스트 알림(이 기기로, 10초에 한 번). 만료된 구독(410)은 지움, VAPID 없으면 503 |
+| POST | `/api/push/ack` · `/api/push/rotate` | (서비스 워커) 받았음 알리기 · 구독이 바뀌었을 때 새 구독 |
+| POST | `/api/me/handoff` · `/api/handoff/claim` | 홈 화면 앱 이어받기 코드 만들기(2시간 · 1회용) · 받기 |
+| GET | `/api/wake` | 서버 깨우기(cron-job.org) — 깨어난 시각 · 저장소 · 스케줄러 마지막 확인 |
 | GET | `/api/live?routes=` · `/api/routes/:no/stations` · PATCH `/api/me/settings` | v0.3 노선별 API(호환용, 화면은 쓰지 않음) |
 
 ## 7. 테스트
 
 ```bash
 cd shared && node --test                       # 59개: 응답 해석 · 국민대행 노선 · 차내 시간 · 원인 · 추천 · 알림 · 예시 노선 · 수업 검색 · 돌발정보 · 날씨 · 왜 늦나요?(사실 · 지연 분 · 기본 안내 · AI 문장 검사)
-cd backend && npm test                         # 73개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러 · /api/courses · 돌발정보 · 기상청 · Gemini(가짜 서버)
+cd backend && npm test                         # 92개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러 · /api/courses · 돌발정보 · 기상청 · Gemini(가짜 서버) · Upstash 저장소 · 푸시(구독 · 테스트 · ack · 410) · 이어받기 · 서비스 워커
 python3 -m unittest tools/test_fetch_courses.py # 7개: 30분 칸 합치기 · 강의 변환 · 쪽 나누기 · 거절 조건 · 대학/학과 찾기 · 전체/과목명 모드
-python3 test/regression_preview.py             # 54개: 미리보기(모든 http 차단) 배지 3상태 · 왜 늦나요?(AI/기본 안내/예시) · 휴대폰/PC · 넘침 · 오류
+python3 test/regression_preview.py             # 80개: 미리보기(모든 http 차단) 배지 3상태 · 왜 늦나요?(AI/기본 안내/예시) · 기기 보기(홈 화면 추가 안내 · 알림 흐름 예시) · 휴대폰/PC · 넘침 · 오류
 python3 test/preview_courses.py                # 38개: 수업 검색 → 미리보기 · 바꿔서 추가(확인 · 취소 · 되돌리기) · 야간/토요일 · 빼기 · 휴대폰/PC
-node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 41개: 실서비스 빌드 + 가짜 서울시 · 돌발정보 · 기상청 · Gemini 서버 / 키 없는 서버 · 수업 검색 → 서버 저장
+node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 58개: 실서비스 빌드 + 가짜 서울시 · 돌발정보 · 기상청 · Gemini · Upstash · 휴대폰(받으면 ack) / 키 없는 서버 · 알림 켜기 → 테스트 → 수신 확인됨 · 자동 재등록 · 아이폰 안내 · 홈 화면 앱 이어받기
 ```
 
 **확인한 것(이 작업 환경, 헤드리스 Chromium):** 정류장 검색 → 선택 → 홈 3요소, 화면 출발 시각 = 서버 `/api/plan`, 정체 원인 표시, 서버에 정류장 저장, 서버 푸시 synced, iPhone 13에서 3요소가 스크롤 없이 보임, 키 없는 서버의 예시 데이터 배지 · 점선 카드 · 정류장 검색 안내 · VAPID 안내, 페이지 오류 0.
+
+**백그라운드 알림에서 확인하지 못한 것(확인 필요):** 실제 아이폰 · 안드로이드로 푸시를 받는 것 · 실제 Upstash · cron-job.org 연결은 이 작업 환경에서 시험하지 못했습니다(Upstash REST 요청 모양은 공식 문서 기준, 테스트는 가짜 서버 · 가짜 휴대폰). 설정의 '확인 필요'가 '수신 확인됨'으로 바뀌는지 직접 확인해 주세요. 아이폰이 홈 화면에 추가할 때 지금 주소(이어받기 코드 포함)를 쓰는지도 실제 기기에서 확인이 필요해요 — 안 되면 홈 화면 앱에서 정류장만 다시 고르면 됩니다.
 
 **하지 못한 것:** 이 작업 환경에서는 서울시 서버에 접속할 수 없어 실제 응답으로는 시험하지 못했습니다(필드는 활용가이드로 대조, 테스트는 가이드 형식의 고정 응답). 배포 뒤 `npm run check:live -- <정류장번호>`로 확인해 주세요. 특히 ① 국민대 정류장 이름(국민대학교앞 · 국민대앞 · 국민대후문)이 실제 응답과 같은지 ② `sectSpd`가 출퇴근 시간에 바뀌는지(노선정보 갱신주기가 '매일 새벽 5시'로 적혀 있음) ③ 실제 Web Push 수신.
 
 ## 8. 남은 일 · 주의
 
-- **무료 호스팅:** 서버 저장소(JSON 파일)는 재배포 · 재시작 때 지워질 수 있습니다. 화면이 이 기기의 값으로 되살리지만, 서버 푸시는 그 사이 계산되지 않을 수 있습니다. 오래 쓰려면 DB를 붙이세요.
+- **무료 호스팅:** Upstash 환경변수가 없으면 서버 저장소(JSON 파일)는 재배포 · 재시작 · 잠들 때 지워집니다(화면이 이 기기의 값으로 되살리지만 그 사이 알림은 계산되지 않음). Upstash를 넣고, 잠든 동안 알림이 멈추지 않게 cron-job.org로 깨워 두세요(1-1).
 - `shared/corridors.js`(노선별 도로 매핑표)는 예시입니다. `check:live` 출력의 실제 정류장 순서로 고치세요.
 - 로그인 · 사용자 보호(지금은 기기별 임의 ID), 서버 여러 대일 때 스케줄러 중복 발송 방지.
 - `fetch_courses.py`는 이 작업 환경에서 학교 서버에 직접 접속하지 못해, 연결된 브라우저로 확인한 응답 구조를 그대로 흉내 낸 데이터로만 시험했습니다. 처음 실행 결과(강의 수 · 시간표 시간이 있는 강의 수)를 꼭 확인하세요.
 - 직접 추가 창은 겹치는 수업이 있어도 안내만 하고 넣습니다(수업 검색만 '바꿔서 추가').
-- '왜 늦나요?'는 실제 Google Gemini 서버로는 이 작업 환경에서 시험하지 못했습니다(요청 · 응답 모양은 Gemini API 문서 기준, 테스트는 가짜 서버). 배포 뒤 `/api/explain/test`로 확인하세요. 무료 등급의 하루 한도는 Google AI Studio에서 확인하고 `GEMINI_MAX_PER_DAY`를 맞추세요. AI 문장은 원인을 확정하지 않습니다.
+- '왜 늦나요?'는 배포한 서버의 `/api/explain/test`에서 실제 Gemini 문장이 나오는 것을 확인했습니다(2026-11-17). 무료 등급의 하루 한도는 Google AI Studio에서 확인하고 `GEMINI_MAX_PER_DAY`를 맞추세요. AI 문장은 원인을 확정하지 않습니다.
 
 ## 9. 출처 · 라이선스
 

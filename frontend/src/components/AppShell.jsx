@@ -1,6 +1,6 @@
 import { DAYS, toHHMM } from '@shared/time.js';
 import { IconBus, IconCalendar, IconHome, IconReplay, IconSettings } from './ui.jsx';
-import { PREVIEW_EXPLAIN, PREVIEW_INCIDENTS, PREVIEW_SOURCES, PREVIEW_WEATHER } from '../hooks/useTrips.js';
+import { PREVIEW_DEVICES, PREVIEW_EXPLAIN, PREVIEW_INCIDENTS, PREVIEW_SOURCES, PREVIEW_WEATHER } from '../hooks/useTrips.js';
 
 export const TABS = [
   { id: 'home', label: '홈', Icon: IconHome },
@@ -90,6 +90,14 @@ export function PreviewBar({ preview, dispatch }) {
           {Object.entries(PREVIEW_WEATHER).map(([id, label]) => (
             <button key={id} type="button" aria-pressed={(preview.weather || 'rain') === id} onClick={() => dispatch({ type: 'setPreview', patch: { weather: id } })}
               className={`h-7 min-w-[40px] whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.weather || 'rain') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
+          ))}
+        </span>
+        {/* 가상 기기: 아이폰 Safari(홈 화면 추가 안내) · 아이폰 앱(알림 켜기 · 테스트 알림, 예시) · 카카오톡(Safari로 열기 안내) */}
+        <span className="flex w-full flex-wrap items-center gap-1 md:w-auto" role="group" aria-label="미리보기 기기">
+          <span className="mr-0.5 whitespace-nowrap font-semibold text-ink">기기 보기</span>
+          {Object.entries(PREVIEW_DEVICES).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={(preview.device || 'pc') === id} onClick={() => dispatch({ type: 'setPreview', patch: { device: id } })}
+              className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.device || 'pc') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
           ))}
         </span>
         {/* '왜 늦나요?' 한 줄 모양: AI 태그(예시 문장 · 실제 AI 응답 아님) / 기본 안내(AI 실패 · 한도 초과 때) */}
