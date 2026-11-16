@@ -27,6 +27,9 @@ export const IconSearch = I(<><circle cx="11" cy="11" r="6.5" /><path d="m16 16 
 export const IconLocate = I(<><circle cx="12" cy="12" r="6.5" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" /><circle cx="12" cy="12" r="2" /></>);
 export const IconChevron = I(<path d="m9.5 5.5 6.5 6.5-6.5 6.5" />);
 export const IconReplay = I(<><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" /><path d="M4.5 4.5v4h4" /></>);
+// 학생증(일반 카드 모양 — 학교 공식 디자인 아님) · 도착(위치 + 체크)
+export const IconIdCard = I(<><rect x="3" y="5" width="18" height="14" rx="2.5" /><circle cx="8.5" cy="11" r="2" /><path d="M5.8 16c.6-1.3 1.6-2 2.7-2s2.1.7 2.7 2M14 10h4M14 13.5h3" /></>);
+export const IconArrive = I(<><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" /><path d="m9.2 10.1 2 2 3.6-3.7" /></>);
 export const IconStop = I(<><rect x="6" y="3" width="12" height="10" rx="2" /><path d="M12 13v8M9 21h6M9 7h6" /></>);
 export const IconSettings = I(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z" /></>);
 
@@ -56,6 +59,19 @@ export function Button({ variant = 'default', size = 'md', className = '', child
   }[variant];
   const s = size === 'sm' ? 'h-8 px-2.5 text-[13px] gap-1.5' : 'h-10 px-3.5 text-sm gap-2';
   return <button type="button" className={`inline-flex items-center justify-center whitespace-nowrap rounded-[10px] border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${s} ${v} ${className}`} {...rest}>{children}</button>;
+}
+
+/** 이미지 고르기 버튼(<label>로 감싸 아이폰에서도 확실히 열림). 고른 파일은 onFile로 — 같은 파일을 다시 골라도 됨 */
+export function FilePickButton({ onFile, children, variant = 'primary', size = 'md', testId, busy = false, className = '' }) {
+  const v = variant === 'primary' ? 'bg-primary text-white border-primary hover:bg-primary-active hover:border-primary-active' : 'bg-panel text-ink border-line hover:border-primary-line hover:text-primary';
+  const s = size === 'sm' ? 'h-8 px-2.5 text-[13px] gap-1.5' : 'h-10 px-3.5 text-sm gap-2';
+  return (
+    <label className={`relative inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-[10px] border font-semibold transition-colors focus-within:ring-[3px] focus-within:ring-primary-soft ${s} ${v} ${busy ? 'pointer-events-none opacity-60' : ''} ${className}`}>
+      <input type="file" accept="image/*" data-testid={testId} className="sr-only" disabled={busy}
+        onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onFile(f); }} />
+      {busy ? '저장 중…' : children}
+    </label>
+  );
 }
 
 const LEVEL = { ok: 'bg-ok-soft text-ok', warn: 'bg-warn-soft text-warn', danger: 'bg-danger-soft text-danger', info: 'bg-primary-soft text-primary-active', muted: 'bg-surface text-ink-muted border border-line' };

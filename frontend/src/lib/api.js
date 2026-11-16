@@ -55,6 +55,10 @@ export const api = {
   pushUnsubscribe: (endpoint) => req('POST', '/api/push/unsubscribe', { endpoint }),
   pushStatus: (endpoint) => req('POST', '/api/push/status', { endpoint }),
   pushTest: (endpoint) => req('POST', '/api/push/test', { endpoint }),
+  // '도착했어요!' — 서버가 시각을 다시 확인하고 내 걸음 반영을 배움(K•CARD+ 이미지는 보내지 않음)
+  arrival: (body) => req('POST', '/api/me/arrival', body),
+  arrivalUndo: (key) => req('POST', '/api/me/arrival/undo', { key }),
+  personalReset: () => req('POST', '/api/me/personal/reset', {}),
   // 홈 화면 앱으로 설정 이어받기
   handoff: () => req('POST', '/api/me/handoff', {}),
   claimHandoff: (token) => req('POST', '/api/handoff/claim', { token }, { auth: false }), // 받기 전에는 사용자 ID를 만들지 않음

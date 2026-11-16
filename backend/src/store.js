@@ -1,4 +1,4 @@
-// 사용자 저장소: 시간표 · 탑승 정류장 · 설정 · 푸시 구독 · 보낸 알림 기록.
+// 사용자 저장소: 시간표 · 탑승 정류장 · 설정 · 푸시 구독 · 보낸 알림 기록 · 내 걸음 반영(도착 기록).
 //   - 외부 DB(Upstash Redis): 환경변수 UPSTASH_REDIS_REST_URL · UPSTASH_REDIS_REST_TOKEN이 있으면.
 //     서버가 시작할 때 전부 읽어 오고(store.ready), 바뀐 사용자만 0.3초 뒤 모아서 저장 → 서버가 잠들거나 다시 배포돼도 그대로
 //   - 없으면 JSON 파일(DATA_FILE, 로컬 개발용). Render 무료 서버에서는 잠들거나 재시작하면 지워집니다.
@@ -8,6 +8,7 @@ import path from 'node:path';
 import { EXAMPLE_ROUTES } from '../../shared/transitModel.js';
 import { DEFAULT_MARGIN_MIN, DEFAULT_NOTIFY_BEFORE_MIN } from '../../shared/departure.js';
 import { DEFAULTS } from '../../shared/recommend.js';
+import { ARRIVAL, emptyPersonal } from '../../shared/arrival.js';
 import { createUpstash, upstashUsers } from './upstash.js';
 
 const ARS_ID = /^\d{5}$/;
@@ -43,12 +44,14 @@ export const defaultUser = () => ({
   pushLog: [],     // 보낸 알림(테스트 · 출발 알림) 기록 — 서비스 워커가 '받았음'을 알리면 ackAt
   fired: {},       // `${dateKey}:${classId}` → 보낸 알림 기록
   handoff: null,   // 홈 화면 앱으로 설정 이어받기 코드 { token, exp, usedAt }
+  personal: emptyPersonal(), // 내 걸음 반영 { offsetMin(−5 ~ +15), samples, updatedAt } — '도착했어요!'로 배움
+  arrivals: [],    // 최근 도착 기록(최대 20개) — 같은 날 같은 수업은 한 번만
   updatedAt: 0,
 });
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 /**
- * 기록이 끝없이 커지지 않게: '보낸 알림' 기록은 가장 최근 날짜에서 3일 안의 것만 · 구독은 최근 5개 · 알림 로그는 최근 8개
+ * 기록이 끝없이 커지지 않게: '보낸 알림' 기록은 가장 최근 날짜에서 3일 안의 것만 · 구독은 최근 5개 · 알림 로그는 최근 8개 · 도착 기록은 최근 20개
  * (서버 시계 대신 기록 안의 날짜를 기준으로 해서, 시계를 바꿔 끼우는 테스트 · FAKE_NOW에서도 같은 결과)
  */
 export function tidyUser(u) {
@@ -59,6 +62,7 @@ export function tidyUser(u) {
   }
   if (Array.isArray(u.push) && u.push.length > 5) u.push = u.push.slice(-5);
   if (Array.isArray(u.pushLog) && u.pushLog.length > 8) u.pushLog = u.pushLog.slice(-8);
+  if (Array.isArray(u.arrivals) && u.arrivals.length > ARRIVAL.keep) u.arrivals = u.arrivals.slice(-ARRIVAL.keep);
   return u;
 }
 

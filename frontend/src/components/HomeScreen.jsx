@@ -2,8 +2,10 @@ import { DAYS, toHHMM } from '@shared/time.js';
 import { CONGESTION } from '@shared/stopTrips.js';
 import { reasonText } from '@shared/liveStatus.js';
 import { STATUS } from '@shared/recommend.js';
+import { personalLabel } from '@shared/arrival.js';
 import { routeColor } from '../lib/palette.js';
-import { Button, IconAlert, IconBus, IconChevron, IconPin, IconStop, SourceTag } from './ui.jsx';
+import { Button, IconAlert, IconBus, IconChevron, IconIdCard, IconPin, IconStop, SourceTag } from './ui.jsx';
+import { ArriveButton, ArrivalPrompt, ArrivedCard } from './Arrival.jsx';
 import { StopSearch } from './StopPicker.jsx';
 import IncidentStrip from './IncidentStrip.jsx';
 import WhyStrip from './WhyStrip.jsx';
@@ -12,6 +14,7 @@ const TONE = {
   ok: 'bg-go-soft text-go', warn: 'bg-caution-soft text-caution', danger: 'bg-stop-soft text-stop', muted: 'bg-surface text-ink-muted',
 };
 const DOT = { ok: 'bg-go-dot', warn: 'bg-caution-dot', danger: 'bg-stop-dot', muted: 'bg-ink-muted' };
+const TONE_TEXT = { ok: 'text-go', warn: 'text-caution', danger: 'text-stop', muted: 'text-ink-muted' };
 
 /** 초록·노랑·빨강 상태 태그(색 + 글자로 함께 표시) */
 export function Signal({ tone, children }) {
@@ -91,8 +94,10 @@ const nextDayText = (c) => (c ? `다음 등교: ${DAYS[c.day]}요일 ${c.start} 
 /**
  * 홈: ① 출발 추천 시각 ② 실시간 버스 도착 + 도로 정체 (+ 경로 주변 날씨 · 돌발정보 한 줄) ③ 강의실 도착 예정 + 상태.
  * 계산 과정(도보·차내 시간 내역, 공식)은 보여 주지 않습니다.
+ * 오늘 첫 수업 시작 30분 전 ~ 15분 뒤에는 ③ 카드에 [도착했어요!](상태 태그 자리, 상태는 아랫줄로) → 기록하면 수업이 끝날 때까지 '도착 기록' 카드
+ * @param {object} p.arrival  useArrival 결과 + cls(오늘 첫 수업)
  */
-export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, onPickStop, onSelectStop, onGoTimetable }) {
+export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, arrival, kcardReady, personal, onPickStop, onSelectStop, onGoTimetable }) {
   if (!stop && syncing) return <div className="mx-auto h-48 w-full max-w-[560px] animate-pulse rounded-3xl bg-line/70" aria-busy="true" aria-label="불러오는 중" />;
   if (!stop) {
     return (
@@ -109,14 +114,28 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
   }
 
   const mock = live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터
+  const a = arrival || {}, phase = a.phase || null;
+  const sending = a.send && (a.send.status === 'saving' || a.send.status === 'pending') ? a.send : null;
+  const arrived = Boolean((a.record || sending) && phase && phase !== 'after'); // 기록 뒤 ~ 수업 끝날 때까지
+  const canPress = phase === 'window' && !a.record && !sending;
+  const cardBtn = (label) => <Button onClick={a.view}><IconIdCard className="h-5 w-5" />{kcardReady ? label : 'K•CARD+ 캡처 등록하기'}</Button>;
 
   let body;
-  if (rec?.state === 'no-class') {
+  if (arrived) {
+    body = <ArrivedCard record={a.record} pendingAt={sending?.pressedAt} cls={a.cls} personal={personal} kcardReady={kcardReady} canUndo={a.canUndo} onView={a.view} onUndo={a.undo} />;
+  } else if (rec?.state === 'no-class') {
     body = hasClasses
       ? <Message title={now.weekday > 4 ? '주말이에요. 등교할 수업이 없어요' : '오늘은 등교할 수업이 없어요'}>{nextDayText(nextClass)}</Message>
       : <Message title="시간표를 등록해 주세요" action={<Button variant="primary" onClick={onGoTimetable}>시간표 등록하기</Button>}>첫 수업 시각에 맞춰 출발 시각을 계산해요.</Message>;
   } else if (rec?.state === 'started') {
-    body = <Message title={`${rec.cls.name} 수업이 시작됐어요`}>{nextDayText(nextClass)}</Message>;
+    const title = `${rec.cls.name} 수업이 시작됐어요`;
+    if (phase === 'window') {
+      body = <Message title={title} action={<ArriveButton size="lg" onClick={a.press} busy={a.busy} />}>강의실에 도착했으면 눌러 주세요 · {toHHMM(a.win.closeMin)}(시작 15분 뒤)까지 기록할 수 있어요</Message>;
+    } else if (phase === 'class') {
+      body = <Message title={title} action={cardBtn('K•CARD+ 보기')}>도착 기록 시간(시작 15분 뒤까지)이 지났어요. 수업 중에도 K•CARD+는 볼 수 있어요.</Message>;
+    } else {
+      body = <Message title={title}>{nextDayText(nextClass)}{a.record ? ` · 오늘 ${toHHMM(Math.floor(a.record.arriveMin + 1e-9))} 도착 기록(내 걸음 ${personalLabel(personal?.offsetMin)})` : ''}</Message>;
+    }
   } else if (!rec || rec.state === 'no-trip') {
     if (live?.status === 'loading' || live?.status === 'idle') {
       body = <div className="grid grid-cols-1 gap-4" aria-busy="true" aria-label="불러오는 중">{[196, 124, 124].map((h, i) => <div key={i} className="animate-pulse rounded-3xl bg-line/70" style={{ height: h }} />)}</div>;
@@ -140,6 +159,7 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
     const arrival = n == null ? '도착 정보 없음' : n < 1 ? '곧 도착' : `${Math.round(n)}분 후 도착`;
     // 버스가 보통 · 혼잡이고 서버가 설명(explain)을 보냈으면 '왜 늦나요?' 한 줄(근거를 펼치면 날씨 · 돌발정보 포함),
     // 아니면 지난번 '경로 주변 날씨 · 돌발정보' 줄. 실시간이면 버스 카드 바로 아래, 예시 데이터면 세 카드 다음(첫 화면 3요소를 밀어내지 않게)
+    const classLine = `${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`;
     const strip = t.explain && ['normal', 'heavy'].includes(rec.nextBus.congestion)
       ? <WhyStrip trip={t} why={t.explain} delayMin={t.delayMin} data={live?.incidents} weather={live?.weather} />
       : <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />;
@@ -169,9 +189,12 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
 
         {!mock && strip}
 
-        <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />} caption="강의실 도착"
-          tag={<Signal tone={st.tone}>{st.label}</Signal>}
-          sub={`${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`}>
+        <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />}
+          caption={<>강의실 도착{rec.personalMin ? <span data-testid="personal-hint" className="font-normal"> · 내 걸음 {personalLabel(rec.personalMin)}</span> : null}</>}
+          tag={canPress ? <ArriveButton onClick={a.press} busy={a.busy} /> : <Signal tone={st.tone}>{st.label}</Signal>}
+          sub={canPress
+            ? <><b data-tone={st.tone} className={`font-semibold ${TONE_TEXT[st.tone]}`}>{st.label}</b> · {classLine}</>
+            : classLine}>
           <span className="num">{toHHMM(p.classArriveMin)}</span> 강의실 도착 예정
         </InfoCard>
         {mock && strip}
@@ -179,12 +202,15 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
     );
   }
 
+  // 버스 정보를 못 받는 중(오류 · 노선 없음 · 불러오는 중)이어도 버튼 시간이면 도착 기록은 할 수 있게
+  const prompt = canPress && rec?.state !== 'ok' && rec?.state !== 'started' && a.cls ? <ArrivalPrompt cls={a.cls} busy={a.busy} onArrive={a.press} /> : null;
   return (
     <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-3 short:gap-2.5">
       <StopChip stop={stop} onClick={onPickStop} />
-      {mock && <FallbackNotice reason={live.reason} />}
+      {mock && !arrived && <FallbackNotice reason={live.reason} />}
+      {prompt}
       {body}
-      <DataLine live={live} />
+      {!arrived && <DataLine live={live} />}
     </div>
   );
 }

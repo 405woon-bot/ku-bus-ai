@@ -11,6 +11,8 @@ import { api } from './lib/api.js';
 import { deviceInfo, previewDevice } from './lib/device.js';
 import { attachHandoffToUrl } from './lib/identity.js';
 import { usePush } from './hooks/usePush.js';
+import { useKCard } from './hooks/useKCard.js';
+import { useArrival } from './hooks/useArrival.js';
 import { colorIndexFor } from './lib/palette.js';
 import { courseToClasses } from '@shared/courses.js';
 import { Header, PreviewBar, TabBar, TABS } from './components/AppShell.jsx';
@@ -22,6 +24,7 @@ import ClassDialog from './components/ClassDialog.jsx';
 import ImportDialog from './components/ImportDialog.jsx';
 import AlarmToasts from './components/AlarmToasts.jsx';
 import { InstallBar, InstallSheet } from './components/InstallGuide.jsx';
+import KCardViewer from './components/KCardViewer.jsx';
 
 const readTab = () => { try { const h = window.location.hash.slice(1); return TABS.some((t) => t.id === h) ? h : 'home'; } catch { return 'home'; } };
 
@@ -99,12 +102,16 @@ export default function App({ handoff = null }) {
   const nextClass = useMemo(() => nextSchoolDay(state.classes, now.weekday), [state.classes, now.weekday]);
   const nowKey = Math.floor(now.minutes * 12); // 5초 단위로 다시 계산
   const { walkToStopMin, marginMin } = state.prefs;
+  const personalOffsetMin = state.personal?.offsetMin || 0; // '도착했어요!'로 배운 내 걸음 반영(서버 알림도 같은 값)
   const rec = useMemo(() => (state.stop
-    ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin })
+    ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin })
     : null),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin]);
-  const alarms = useAlarms({ rec, now, fired: state.fired, dispatch, prefs: state.prefs, mockData });
+  [state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin]);
+  // '도착했어요!' · K•CARD+ 캡처(이 기기에만) — 앱을 열 때 이미지를 미리 읽어 두어 누르면 바로 띄움
+  const kcard = useKCard();
+  const arrival = useArrival({ mode: MODE, state, dispatch, now, todayClass, ready: MODE !== 'api' || sync.status === 'synced' });
+  const alarms = useAlarms({ rec, now, fired: state.fired, dispatch, prefs: state.prefs, mockData, arrived: Boolean(arrival.record) });
 
   const [perm, setPerm] = useState(notifyPermission);
   // 기기 구분(미리보기는 '기기 보기' 단추로 고른 가상 기기) → 백그라운드 알림 · 아이폰 홈 화면 추가 안내
@@ -122,6 +129,17 @@ export default function App({ handoff = null }) {
   // 홈 화면 앱이 처음 열려 설정을 이어받았으면 잠깐 알림
   const [handoffToast, setHandoffToast] = useState(Boolean(handoff?.claimed));
   useEffect(() => { if (!handoffToast) return undefined; const t = setTimeout(() => setHandoffToast(false), 6000); return () => clearTimeout(t); }, [handoffToast]);
+
+  const [hlKCard, setHlKCard] = useState(false);
+  const goKCard = useCallback(() => { // 설정 · K•CARD+ 칸으로 이동해 잠깐 강조
+    go('settings'); setHlKCard(true);
+    setTimeout(() => { try { document.getElementById('kcard')?.scrollIntoView({ block: 'center' }); } catch { /* 무시 */ } }, 60);
+    setTimeout(() => setHlKCard(false), 2600);
+  }, [go]);
+  const resetAll = useCallback(() => {
+    dispatch({ type: 'resetAll' });
+    if (MODE === 'api') api.personalReset().catch(() => {}); // 서버에서 배운 내 걸음 반영도 처음부터
+  }, [dispatch]);
 
   const [dialog, setDialog] = useState(null);
   const close = useCallback(() => setDialog(null), []);
@@ -144,6 +162,7 @@ export default function App({ handoff = null }) {
       <main className={`gutter mx-auto ${showBar ? 'pb-[calc(156px+env(safe-area-inset-bottom,0px))] md:pb-24' : 'pb-[calc(96px+env(safe-area-inset-bottom,0px))] md:pb-14'} pt-4 short:pt-3 md:pt-8 ${tab === 'timetable' ? 'max-w-[1160px]' : 'max-w-[960px]'}`}>
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
+            arrival={{ ...arrival, cls: todayClass }} kcardReady={kcard.status === 'ready'} personal={state.personal}
             onPickStop={() => setDialog({ type: 'stop' })} onSelectStop={setStop} onGoTimetable={() => go('timetable')} />
         )}
         {tab === 'timetable' && (
@@ -159,14 +178,19 @@ export default function App({ handoff = null }) {
         {tab === 'settings' && (
           <SettingsScreen mode={MODE} state={state} dispatch={dispatch} onPickStop={() => setDialog({ type: 'stop' })}
             perm={perm} onRequestPerm={async () => setPerm(await requestNotifyPermission())} onTestAlarm={alarms.test}
-            info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} health={health} />
+            info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} health={health}
+            kcard={kcard} onViewCard={arrival.view} onResetPersonal={arrival.reset} highlightKCard={hlKCard} onResetAll={resetAll} />
         )}
       </main>
 
       <TabBar tab={tab} onTab={go} />
       {showBar && <InstallBar info={info} onOpen={() => setGuide(true)} onClose={later} />}
       {guide && <InstallSheet info={info} onClose={() => setGuide(false)} onLater={later} />}
-      <AlarmToasts toasts={alarms.toasts} onDismiss={alarms.dismiss} onSnooze={alarms.snooze} />
+      <AlarmToasts toasts={alarms.toasts} onDismiss={alarms.dismiss} onSnooze={alarms.snooze} atTop={tab === 'home' && arrival.phase === 'window' && !arrival.record} />
+      {arrival.viewer && (
+        <KCardViewer mode={MODE} kcard={kcard} send={arrival.send} fromPress={arrival.viewer.fromPress} onClose={arrival.closeViewer}
+          onGoSettings={() => { arrival.closeViewer(); goKCard(); }} />
+      )}
 
       {dialog?.type === 'stop' && <StopPicker mode={MODE} onSelect={setStop} onClose={close} />}
       {dialog?.type === 'class' && (

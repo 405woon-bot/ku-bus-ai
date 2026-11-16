@@ -1,15 +1,22 @@
 """미리보기 빌드(frontend/dist-preview/index.html) 회귀 점검 — 서버·API 키·네트워크 없이 열림.
 모든 http 요청을 막은 상태에서 배지 상태 3가지(실시간 연결 · 잠시 끊김 · 실시간 실패)를 휴대폰·PC로 확인합니다.
 실행: cd frontend && npm run build:preview  →  python test/regression_preview.py"""
-import re, sys
+import io, re, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 URL = (ROOT / 'frontend' / 'dist-preview' / 'index.html').as_uri()
 OUT = str(ROOT / 'test' / 'screenshots') + '/'
 
 res = []
 def check(n, c, d=''): res.append(('PASS' if c else 'FAIL') + f' {n} {d}')
+def capture_png():
+    """시험용 '캡처' 이미지(세로 1170×2532, 실제 학생증 아님)"""
+    im = Image.new('RGB', (1170, 2532), '#EEF1F5'); d = ImageDraw.Draw(im)
+    d.rectangle([180, 700, 990, 1510], fill='#FFFFFF'); d.rectangle([330, 850, 840, 1360], fill='#2B3442')
+    buf = io.BytesIO(); im.save(buf, 'PNG'); return buf.getvalue()
+CAPTURE = capture_png()
 with sync_playwright() as p:
     b = p.chromium.launch()
     for label, args in [('iphone13', dict(**p.devices['iPhone 13'])), ('desktop', dict(viewport={'width': 1440, 'height': 900}))]:
@@ -139,6 +146,79 @@ with sync_playwright() as p:
         ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
         check(f'[{label}] 설정 가로 넘침 없음', ov <= 0, str(ov))
         pg.screenshot(path=OUT + f'preview_{label}_settings.png')
+        # ── '도착했어요!' · K•CARD+ 캡처(미리보기: 서버 대신 이 기기에서 같은 계산) ──
+        def jump(m):
+            pg.select_option('select[aria-label="미리보기 시각 이동"]', str(m)); pg.wait_for_timeout(450)
+            for _ in range(2):
+                x = pg.get_by_role('button', name='알림 닫기')
+                if x.count(): x.first.click(); pg.wait_for_timeout(120)
+        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
+        pg.get_by_role('button', name='처음부터').click(); pg.wait_for_timeout(300)
+        check(f'[{label}] 도착: 08:05에는 버튼 없음(수업 시작 30분 전부터)', pg.get_by_test_id('arrive-button').count() == 0)
+        jump(8 * 60 + 57)
+        third = pg.locator('section[aria-label="강의실 도착 예정"]')
+        check(f'[{label}] 도착: 08:57 ③ 카드에 [도착했어요!] · 상태(지각 위험)는 아랫줄', third.get_by_test_id('arrive-button').count() == 1 and third.locator('b[data-tone]').inner_text() == '지각 위험', flat(third.inner_text()))
+        if label == 'iphone13':
+            bar = pg.locator('div.border-b.border-dashed.bg-surface').first.bounding_box(); tb = pg.locator('nav.fixed').bounding_box(); bb = third.bounding_box()
+            check(f'[{label}] 도착: 버튼이 있어도 3요소가 첫 화면(미리보기 띠 제외)', bb['y'] + bb['height'] - bar['height'] <= tb['y'], f"bottom={bb['y'] + bb['height'] - bar['height']:.0f} tab={tb['y']:.0f}")
+        reqs = []
+        pg.on('request', lambda r: reqs.append(r.url) if r.url.startswith('http') else None)
+        pg.get_by_test_id('arrive-button').click(); pg.wait_for_timeout(400)
+        empty = pg.get_by_test_id('kcard-empty')
+        fb = flat(pg.get_by_test_id('arrival-feedback').inner_text()) if pg.get_by_test_id('arrival-feedback').count() else ''
+        check(f'[{label}] 도착: 이미지 없음 → 안내(설정에서 K•CARD+ 캡처를 등록하면 도착 시 바로 띄워 드려요) + 등록 바로가기', empty.count() == 1 and '설정에서 K•CARD+ 캡처를 등록하면 도착 시 바로 띄워 드려요' in flat(empty.inner_text())
+              and empty.get_by_role('button', name='설정에서 등록하기').count() == 1, flat(empty.inner_text())[:160])
+        check(f'[{label}] 도착: 피드백 — 기록 완료 · 08:57 수업 3분 전 · 다음부터 1분 일찍 · 내 걸음 반영 +1분', '도착 기록 완료!' in fb and '08:57 도착 · 수업 3분 전' in fb
+              and '다음부터 평소보다 1분 일찍 도착하도록 안내할게요' in fb and '내 걸음 반영 +1분' in fb, fb)
+        pg.get_by_role('button', name='설정에서 등록하기').click(); pg.wait_for_timeout(500)
+        ks = pg.get_by_test_id('kcard-settings')
+        check(f'[{label}] 등록 바로가기 → 설정 · K•CARD+ 칸 강조', pg.evaluate('location.hash') == '#settings' and 'border-primary' in (ks.get_attribute('class') or ''))
+        pg.get_by_test_id('kcard-file').set_input_files(files=[{'name': 'kcard.png', 'mimeType': 'image/png', 'buffer': CAPTURE}]); pg.wait_for_timeout(900)
+        stx = flat(pg.get_by_test_id('kcard-status').inner_text())
+        check(f'[{label}] 설정: 캡처 이미지 등록 → 미리보기 · 등록됨 · 바꾸기/삭제', stx.startswith('등록됨 · ') and ks.locator('img').count() == 1 and ks.get_by_text('바꾸기').count() == 1 and ks.get_by_role('button', name='삭제').count() == 1, stx)
+        check(f'[{label}] 설정: 이미지는 이 기기에만(등록 · 도착 기록 중 네트워크 요청 없음)', not reqs and '서버로 보내지 않아요' in flat(ks.inner_text()), str(reqs)[:200])
+        per = flat(pg.get_by_test_id('personal-status').inner_text())
+        check(f'[{label}] 설정: 내 걸음 반영 +1분 · 도착 기록 1번 · 최근 기록', '+1분' in per and '도착 기록 1번' in per and '08:57 도착' in per and '수업 3분 전' in per, per)
+        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(400)
+        card = pg.get_by_test_id('arrived-card')
+        check(f'[{label}] 도착 뒤 홈: 도착 기록 카드 · K•CARD+ 다시 보기 · 버튼은 한 번만', card.count() == 1 and 'K•CARD+ 다시 보기' in card.inner_text() and pg.get_by_test_id('arrive-button').count() == 0
+              and '내 걸음 반영 +1분' in flat(card.inner_text()), flat(card.inner_text()))
+        card.get_by_test_id('kcard-open').click(); pg.wait_for_timeout(400)
+        viewer = pg.get_by_test_id('kcard-viewer')
+        nat = pg.evaluate("() => { const i = document.querySelector('[data-testid=\"kcard-viewer\"] img'); return i ? i.naturalWidth : 0; }")
+        check(f'[{label}] K•CARD+ 다시 보기: 전체 화면 이미지(1170px) · 피드백 없이', viewer.count() == 1 and nat == 1170 and pg.get_by_test_id('arrival-feedback').count() == 0, str(nat))
+        if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_kcard_viewer.png')
+        pg.keyboard.press('Escape'); pg.wait_for_timeout(250)
+        check(f'[{label}] Esc로 닫힘', pg.get_by_test_id('kcard-viewer').count() == 0)
+        # 다음 날(처음부터): ③ 카드에 내 걸음 +1분 → 강의실 도착 예정 08:54 → 08:55
+        pg.get_by_role('button', name='처음부터').click(); pg.wait_for_timeout(400)
+        third = pg.locator('section[aria-label="강의실 도착 예정"]'); ttx = flat(third.inner_text())
+        check(f'[{label}] 다음 날: ③ 카드 \'내 걸음 +1분\' · 도착 예정 08:55(원래 08:54)', pg.get_by_test_id('personal-hint').count() == 1 and '내 걸음 +1분' in ttx and '08:55 강의실 도착 예정' in ttx, ttx)
+        jump(8 * 60 + 57)
+        pg.get_by_test_id('arrive-button').click(); pg.wait_for_timeout(500)
+        fb = flat(pg.get_by_test_id('arrival-feedback').inner_text())
+        check(f'[{label}] 이미지 있으면 누르자마자 전체 화면 + 피드백(+1 → +2분)', pg.get_by_test_id('kcard-viewer').count() == 1 and '다음부터 평소보다 1분 일찍' in fb and '내 걸음 반영 +2분' in fb, fb)
+        pg.get_by_test_id('kcard-viewer').get_by_role('button', name='닫기').last.click(); pg.wait_for_timeout(300)
+        card = pg.get_by_test_id('arrived-card')
+        card.get_by_role('button', name='잘못 눌렀어요').click(); card.get_by_role('button', name='기록 취소하기').click(); pg.wait_for_timeout(300)
+        check(f'[{label}] 잘못 눌렀어요 → 기록 취소: 보정 +1분으로 · 버튼 다시', pg.get_by_test_id('arrived-card').count() == 0 and pg.get_by_test_id('arrive-button').count() == 1
+              and '내 걸음 +1분' in flat(pg.locator('section[aria-label="강의실 도착 예정"]').inner_text()))
+        jump(9 * 60 + 5)
+        msg = flat(pg.locator('main').inner_text())
+        check(f'[{label}] 09:05(시작 뒤 15분 안): 큰 [도착했어요!]', pg.get_by_test_id('arrive-button').count() == 1 and '09:15(시작 15분 뒤)까지 기록할 수 있어요' in msg, msg[:160])
+        jump(9 * 60 + 30)
+        msg = flat(pg.locator('main').inner_text())
+        check(f'[{label}] 09:30(기록 없이 수업 중): 버튼 없음 · K•CARD+ 보기', pg.get_by_test_id('arrive-button').count() == 0 and 'K•CARD+ 보기' in msg and '도착 기록 시간(시작 15분 뒤까지)이 지났어요' in msg, msg[:160])
+        # 설정: 처음부터 다시 배우기 · 이미지 삭제
+        pg.evaluate("location.hash = '#settings'"); pg.wait_for_timeout(300)
+        per = pg.get_by_test_id('personal-status')
+        per.get_by_role('button', name='처음부터 다시 배우기').click(); per.get_by_role('button', name='보정 0으로 · 기록 지우기').click(); pg.wait_for_timeout(300)
+        check(f'[{label}] 처음부터 다시 배우기 → 0분 · 기록 없음', '0분' in per.inner_text() and '아직 도착 기록이 없어요' in per.inner_text(), flat(per.inner_text()))
+        ks = pg.get_by_test_id('kcard-settings')
+        ks.get_by_role('button', name='삭제').click(); ks.get_by_role('button', name='이 기기에서 지우기').click(); pg.wait_for_timeout(400)
+        check(f'[{label}] 이미지 삭제 → 아직 등록하지 않았어요', flat(pg.get_by_test_id('kcard-status').inner_text()) == '아직 등록하지 않았어요' and ks.locator('img').count() == 0)
+        ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+        check(f'[{label}] 도착 · K•CARD+ 화면 가로 넘침 없음', ov <= 0, str(ov))
         check(f'[{label}] 페이지 오류 없음', not errs, str(errs)[:200])
         ctx.close()
     b.close()

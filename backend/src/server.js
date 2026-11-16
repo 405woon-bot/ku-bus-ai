@@ -19,11 +19,24 @@ import { createAccidentService } from './transit/seoulAccident.js';
 import { createWeatherService } from './transit/kmaWeather.js';
 import { createExplainService } from './transit/geminiExplain.js';
 import { delayMinutes } from '../../shared/explain.js';
+import { firstClassOf } from '../../shared/recommend.js';
+import { arrivalKey, arrivalWindow, emptyPersonal, keepArrivals, recordArrival, undoArrival } from '../../shared/arrival.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 const HANDOFF_MS = 2 * 3600_000; // 홈 화면 앱 이어받기 코드 유효 시간(한 번만 쓰임)
 const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+/**
+ * '도착했어요!'를 누른 시각(ms): 휴대폰 시계가 서버와 2분 안이면 누른 시각(pressedAt) 그대로 —
+ * 서버가 잠에서 깨는 동안 늦게 받거나 연결이 끊겨 나중에 다시 보내도 정확. 시계가 틀린 휴대폰이면
+ * '누른 뒤 지난 시간'(sentAt − pressedAt, 최대 6시간)만 믿고 서버 시각에서 뺌. 둘 다 없으면 서버 시각
+ */
+export function arrivalTime(body, serverMs) {
+  const p = Number(body?.pressedAt), s = Number(body?.sentAt);
+  if (Number.isFinite(p) && Math.abs(p - serverMs) <= 2 * 60_000) return p;
+  if (Number.isFinite(p) && Number.isFinite(s) && s >= p && s - p <= 6 * 3600_000) return serverMs - (s - p);
+  return serverMs;
+}
 function validClass(c, i) {
   const day = Number(c.day), start = clean(c.start, 5), end = clean(c.end, 5);
   if (!clean(c.name, 40)) throw new Error(`${i + 1}번째 수업: 과목명이 없어요`);
@@ -127,6 +140,44 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     res.json({ ok: true });
   });
 
+  // ── '도착했어요!': 오늘 첫 수업 도착 기록 → 내 걸음 반영(EMA, shared/arrival.js) — 같은 날 같은 수업은 한 번만 ──
+  //   버튼 시간(수업 시작 30분 전 ~ 15분 뒤)과 '오늘 첫 수업'은 서버 시각으로 다시 확인. 결과는 사용자 기록(외부 DB)에 저장
+  const personalOf = (u) => ({ personal: u.personal, arrivals: u.arrivals });
+  app.post('/api/me/arrival', (req, res) => {
+    const at = arrivalTime(req.body, now().getTime()), u = store.user(req.userId), p = seoulParts(new Date(at));
+    const cls = p.weekday < 5 ? firstClassOf(u.classes, p.weekday) : null;
+    if (!cls) return res.status(422).json({ error: '오늘은 등교할 수업이 없어요', kind: 'no-class', ...personalOf(u) });
+    const want = clean(req.body?.classId, 40);
+    if (want && want !== cls.id) return res.status(422).json({ error: '오늘 첫 수업이 바뀌었어요. 화면을 새로 고친 뒤 다시 눌러 주세요', kind: 'class-changed', ...personalOf(u) });
+    const key = arrivalKey(p.dateKey, cls), old = u.arrivals.find((a) => a.key === key);
+    if (old) return res.status(409).json({ error: '오늘 이 수업은 이미 도착을 기록했어요', kind: 'already', record: old, ...personalOf(u) });
+    const win = arrivalWindow(cls, p.minutes);
+    if (!win.canRecord) {
+      return res.status(422).json({ error: `도착 기록은 ${toHHMM(win.openMin)} ~ ${toHHMM(win.closeMin)}(수업 시작 30분 전 ~ 15분 뒤)에만 할 수 있어요`, kind: 'outside-window', ...personalOf(u) });
+    }
+    let out = null;
+    store.update(req.userId, (x) => {
+      out = recordArrival(x.personal, { key, dateKey: p.dateKey, cls, arriveMin: p.minutes, at: new Date(at).toISOString() });
+      x.personal = out.personal;
+      x.arrivals = keepArrivals([...(x.arrivals || []), out.record]);
+    });
+    res.json({ ok: true, record: out.record, ...personalOf(store.user(req.userId)) });
+  });
+  // 잘못 누른 오늘 기록 되돌리기(가장 최근 기록만 → 그 앞 보정값으로)
+  app.post('/api/me/arrival/undo', (req, res) => {
+    const key = clean(req.body?.key, 80), u = store.user(req.userId);
+    if (!key.startsWith(`${seoulParts(now()).dateKey}:`)) return res.status(409).json({ error: '오늘 기록만 되돌릴 수 있어요', kind: 'not-today', ...personalOf(u) });
+    const r = undoArrival(u.personal, u.arrivals, key, now().toISOString());
+    if (!r) return res.status(404).json({ error: '되돌릴 기록을 찾지 못했어요', kind: 'not-found', ...personalOf(u) });
+    store.update(req.userId, (x) => { x.personal = r.personal; x.arrivals = r.arrivals; });
+    res.json({ ok: true, removed: r.removed, ...personalOf(store.user(req.userId)) });
+  });
+  // 내 걸음 반영 처음부터(보정 0 · 도착 기록 지움)
+  app.post('/api/me/personal/reset', (req, res) => {
+    store.update(req.userId, (x) => { x.personal = emptyPersonal(); x.arrivals = []; });
+    res.json({ ok: true, ...personalOf(store.user(req.userId)) });
+  });
+
   // 수업 검색(시간표 탭): courses.json에서 과목명·교수명·과목번호로 찾기
   app.get('/api/courses/meta', (_req, res) => res.json(courses.meta));
   app.get('/api/courses', (req, res) => {
@@ -220,8 +271,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   // 오늘 추천(서버 계산, 화면과 같은 shared/recommend.js) + 지금 보낼 알림
   app.get('/api/plan', async (req, res) => {
     try {
-      const { now: n, rec, live, alarms, mockData } = await planFor(store.user(req.userId), provider, now());
-      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, source: live?.source ?? null, reason: live?.reason ?? null, reasonText: live?.reasonText ?? '', stale: Boolean(live?.stale), mockData, rec, trips: live?.trips ?? [], alarmsDue: alarms });
+      const { now: n, rec, live, alarms, mockData, arrived } = await planFor(store.user(req.userId), provider, now());
+      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, source: live?.source ?? null, reason: live?.reason ?? null, reasonText: live?.reasonText ?? '', stale: Boolean(live?.stale), mockData, rec, trips: live?.trips ?? [], alarmsDue: alarms, arrived });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

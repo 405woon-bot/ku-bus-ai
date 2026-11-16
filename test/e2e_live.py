@@ -1,8 +1,9 @@
 """실서비스 빌드(frontend/dist) + 백엔드 e2e. 서울시 API 자리에 테스트 고정 응답을 넣은 서버(8801)와 키 없는 서버(8802)를 씁니다.
 실행: cd frontend && npm run build  →  node backend/scripts/e2eServer.js &  →  python test/e2e_live.py"""
-import datetime, json, re, sys, time
+import datetime, io, json, re, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent / 'screenshots'
 OUT.mkdir(exist_ok=True)
@@ -26,6 +27,9 @@ PUSH_STUB = """
   })();"""
 hhmm = lambda m: f'{int(m // 60):02d}:{int(m % 60):02d}'
 flat = lambda s: re.sub(r'\s+', ' ', s).strip()
+def capture_png():  # 시험용 '캡처' 이미지(실제 학생증 아님)
+    im = Image.new('RGB', (1170, 2532), '#EEF1F5'); d = ImageDraw.Draw(im); d.rectangle([330, 850, 840, 1360], fill='#2B3442')
+    buf = io.BytesIO(); im.save(buf, 'PNG'); return buf.getvalue()
 
 def context(b, p, port, uid, **kw):
     ctx = b.new_context(**kw)
@@ -220,6 +224,79 @@ with sync_playwright() as p:
     again = api(ctx, 8801, 'x', 'POST', '/api/handoff/claim', {'token': token})
     check('[이어받기] 쓴 코드는 다시 못 씀(410)', 'error' in again and '이미' in again['error'], str(again))
     check('[홈 화면 앱] 페이지 오류 없음', not errs, str(errs)[:200])
+    ctx.close()
+
+    # ⑤ '도착했어요!'(실서비스): 서버가 누른 시각 · 버튼 시간을 확인하고 배워서 외부 DB(가짜 Upstash)에 저장 · 출발 알림 멈춤 · 되돌리기
+    #    서버 시계(월 08:10부터 흐름)에 맞춰 '2분 뒤 시작하는 수업'을 만들고 화면 시계를 그 분의 15초로 → 수업 1분 남짓 전에 도착(빠듯)
+    uid3 = uid + 'a'
+    ctx = context(b, p, 8801, uid3, **p.devices['iPhone 13'])
+    srv = datetime.datetime.fromisoformat(api(ctx, 8801, uid3, 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    t_arr = srv.replace(second=15, microsecond=0)
+    start_min = t_arr.hour * 60 + t_arr.minute + 2
+    A_CLASS = {'id': 'e2eA', 'name': '알고리즘', 'day': 0, 'start': hhmm(start_min), 'end': hhmm(start_min + 75), 'building': '미래관', 'room': '410'}
+    api(ctx, 8801, uid3, 'PUT', '/api/me/timetable', {'classes': [A_CLASS]})
+    api(ctx, 8801, uid3, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
+    pg = ctx.new_page(); errs = []; sent = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.on('request', lambda r: sent.append((r.method, r.url, len(r.post_data or ''))) if r.method in ('POST', 'PUT', 'PATCH') else None)
+    pg.clock.install(time=t_arr); pg.goto('http://localhost:8801/')
+    btn = pg.get_by_test_id('arrive-button'); btn.wait_for(timeout=10000)
+    check('[도착] 실서비스: 수업 2분 전 → 홈에 [도착했어요!]', btn.count() == 1, A_CLASS['start'])
+    btn.click()
+    pg.wait_for_selector('[data-testid="arrival-feedback"][data-status="done"]', timeout=8000)
+    ftx = flat(pg.get_by_test_id('arrival-feedback').inner_text())
+    check('[도착] 서버가 기록 · 학습: 수업 1분 전(빠듯) → 다음부터 2분 일찍 · 내 걸음 반영 +2분', '도착 기록 완료!' in ftx and '수업 1분 전' in ftx and '조금 빠듯했어요' in ftx
+          and '다음부터 평소보다 2분 일찍 도착하도록 안내할게요' in ftx and '내 걸음 반영 +2분' in ftx, ftx)
+    check('[도착] 이미지가 없으면 등록 안내', pg.get_by_test_id('kcard-empty').count() == 1)
+    me = api(ctx, 8801, uid3, 'GET', '/api/me'); rec0 = (me.get('arrivals') or [{}])[-1]
+    check('[도착] API: /api/me — 내 걸음 반영 1.6~1.9(정수 +2) · 도착 기록 1건(오늘 · 이 수업 · 빠듯)', 1.5 <= me['personal']['offsetMin'] <= 2.0 and me['personal']['samples'] == 1
+          and rec0.get('classId') == 'e2eA' and rec0.get('key', '').startswith('2026-11-09:') and rec0.get('verdict') == 'tight', f"{me.get('personal')} {rec0}")
+    again = api(ctx, 8801, uid3, 'POST', '/api/me/arrival', {'classId': 'e2eA'})
+    check('[도착] 같은 수업 두 번째는 409(이미 기록) · 기록 그대로', again.get('kind') == 'already' and again.get('record', {}).get('key') == rec0.get('key'), str(again)[:120])
+    plan = api(ctx, 8801, uid3, 'GET', '/api/plan')
+    check('[도착] /api/plan: arrived · 출발 알림 멈춤 · 추천에 내 걸음 +2분', plan.get('arrived') is True and plan.get('alarmsDue') == [] and plan['rec'].get('personalMin') == 2,
+          f"{plan.get('arrived')} {plan.get('alarmsDue')} {plan['rec'].get('state')} {plan['rec'].get('personalMin')}")
+    pg.get_by_test_id('kcard-empty').locator('xpath=ancestor::div[@role="dialog"]').get_by_role('button', name='닫기').last.click()
+    card = pg.get_by_test_id('arrived-card')
+    check('[도착] 홈: 도착 기록 카드 · 내 걸음 반영 +2분 · 버튼은 한 번만', card.count() == 1 and '내 걸음 반영 +2분' in flat(card.inner_text()) and pg.get_by_test_id('arrive-button').count() == 0, flat(card.inner_text()))
+    pg.reload(); pg.get_by_test_id('arrived-card').wait_for(timeout=10000)
+    check('[도착] 다시 열어도(서버 값으로) 도착 기록 카드', pg.get_by_test_id('arrive-button').count() == 0)
+    pg.evaluate("location.hash = '#settings'"); pg.get_by_test_id('kcard-settings').wait_for(timeout=5000)
+    pg.get_by_test_id('kcard-file').set_input_files(files=[{'name': 'kcard.png', 'mimeType': 'image/png', 'buffer': capture_png()}])
+    pg.wait_for_selector('[data-testid="kcard-settings"][data-state="ready"]', timeout=8000)
+    me = api(ctx, 8801, uid3, 'GET', '/api/me')
+    check('[K•CARD+] 실서비스: 등록됨 · 서버로 보낸 요청 본문은 모두 작음(이미지는 이 기기에만)', bool(sent) and all(n < 4000 for _, _, n in sent) and 'data:image' not in json.dumps(me) and 'kcard' not in json.dumps(me),
+          str([(m, u.split('8801')[-1], n) for m, u, n in sent])[:240])
+    per = flat(pg.get_by_test_id('personal-status').inner_text())
+    check('[도착] 설정: 내 걸음 반영 +2분 · 도착 기록 1번', '+2분' in per and '도착 기록 1번' in per, per)
+    pg.evaluate("location.hash = '#home'"); pg.get_by_test_id('kcard-open').click()
+    pg.get_by_test_id('kcard-viewer').wait_for(timeout=5000)
+    check('[K•CARD+] 다시 보기: 전체 화면 이미지', pg.evaluate("() => document.querySelector('[data-testid=\"kcard-viewer\"] img').naturalWidth") == 1170)
+    pg.screenshot(path=str(OUT / 'live_iphone13_kcard_viewer.png'))
+    pg.keyboard.press('Escape')
+    card = pg.get_by_test_id('arrived-card')
+    card.get_by_role('button', name='잘못 눌렀어요').click(); card.get_by_role('button', name='기록 취소하기').click()
+    pg.get_by_test_id('arrive-button').wait_for(timeout=5000)
+    me = api(ctx, 8801, uid3, 'GET', '/api/me')
+    check('[도착] 잘못 눌렀어요 → 서버에서 기록 취소 · 보정 0 · 버튼 다시', me['personal']['offsetMin'] == 0 and me['arrivals'] == [], str(me['personal']))
+    # 연결이 끊겼을 때: 누른 기록을 이 기기에 두었다가(보내는 중 카드) 3초 뒤 다시 보내 기록
+    tries = {'n': 0}
+    def flaky(route):
+        tries['n'] += 1
+        if tries['n'] == 1: route.abort()
+        else: route.continue_()
+    pg.route('**/api/me/arrival', flaky)
+    pg.get_by_test_id('arrive-button').click()
+    pg.wait_for_selector('[data-testid="arrival-feedback"][data-status="pending"]', timeout=5000)
+    ptx = flat(pg.get_by_test_id('arrival-feedback').inner_text())
+    check('[도착] 연결이 끊기면: 아직 못 보냈어요 · 이 기기에 두었다가 다시 보냄', '도착 기록을 아직 못 보냈어요' in ptx and '누른 시각 그대로' in ptx
+          and pg.evaluate("localStorage.getItem('kubusai:arrival:pending') !== null"), ptx)
+    pg.wait_for_selector('[data-testid="arrival-feedback"][data-status="done"]', timeout=12000)
+    me = api(ctx, 8801, uid3, 'GET', '/api/me')
+    check('[도착] 잠시 뒤 다시 보내 기록 완료 · 한 번만 저장 · 보낼 것 비움', tries['n'] == 2 and len(me['arrivals']) == 1 and me['personal']['samples'] == 1
+          and pg.evaluate("localStorage.getItem('kubusai:arrival:pending') === null"), f"tries={tries['n']} {me['personal']}")
+    pg.unroute('**/api/me/arrival')
+    check('[도착] 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
 
     # ③ 키 없는 서버: 정류장 검색은 이유 안내, 고른 정류장은 예시 데이터(점선) + 이유, 서버 푸시는 VAPID 없음

@@ -1,6 +1,7 @@
 /* global __DATA_MODE__ */
 import { useEffect, useReducer } from 'react';
 import { DEFAULTS } from '@shared/recommend.js';
+import { emptyPersonal } from '@shared/arrival.js';
 import { SAMPLE_CLASSES } from '../data/sampleTimetable.js';
 import { loadState, saveState } from '../lib/platform.js';
 
@@ -15,8 +16,10 @@ export const initialState = () => ({
   stop: MODE === 'sample' ? { arsId: 'S-01', name: '고려대사범대학부속고등학교' } : null,
   prefs: { walkToStopMin: DEFAULTS.walkToStopMin, marginMin: DEFAULTS.marginMin, notify: true, notifyBeforeMin: DEFAULTS.notifyBeforeMin },
   walkOverrides: {},
-  preview: { speed: 1, epoch: 1, source: 'live', incidents: 'all', weather: 'rain', explain: 'ai', device: 'pc' },   // 미리보기 시계·배지·예시 돌발정보·예시 날씨·'왜 늦나요?' 모양·가상 기기(샘플 모드 전용)
+  preview: { speed: 1, epoch: 1, source: 'live', incidents: 'all', weather: 'rain', explain: 'ai', device: 'pc', at: null, jump: 0 },   // 미리보기 시계(시각 이동 at)·배지·예시 돌발정보·예시 날씨·'왜 늦나요?' 모양·가상 기기(샘플 모드 전용)
   fired: {},                         // `${날짜}:${수업id}` → 보낸 알림
+  personal: emptyPersonal(),         // 내 걸음 반영(실서비스는 서버 값을 받아 둠)
+  arrivals: [],                      // 최근 도착 기록(같은 날 같은 수업은 한 번)
   log: [],
 });
 
@@ -41,6 +44,7 @@ function reducer(s, a) {
       const slot = a.alarm.type === 'earlier' ? 'depart' : a.alarm.type;
       return { ...s, fired: { ...s.fired, [a.key]: { ...cur, [slot]: { departMin: a.alarm.departMin } } }, log: [{ ...a.alarm, key: a.key }, ...s.log].slice(0, 20) };
     }
+    case 'arrivalSaved': return { ...s, personal: a.personal || emptyPersonal(), arrivals: Array.isArray(a.arrivals) ? a.arrivals : s.arrivals };
     case 'hydrate': return { ...s, ...a.patch };
     case 'resetAll': return initialState();
     default: return s;

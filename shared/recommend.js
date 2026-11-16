@@ -4,8 +4,10 @@
 //   강의실 도착 = 탑승 시각 + 차내 시간(실시간 구간 속도) + 하차 문→강의 건물 도보
 //   추천 = 수업 시작 '여유시간(5분)' 전까지 도착하는 차 중 가장 늦게 타도 되는 차
 //   출발 시각 = 추천 차 탑승 시각 − 정류장까지 걸어가는 시간(기본 5분)
+//   내 걸음 반영(personalOffsetMin, '도착했어요!'로 배움) = 강의실 도착 예정에 더하는 내 여유(+면 그만큼 일찍 도착하는 차)
 import { DEFAULT_WALK_MIN } from './campusData.js';
 import { toMin, toHHMM } from './time.js';
+import { appliedOffset } from './arrival.js';
 
 export const DEFAULTS = { marginMin: 5, walkToStopMin: 5, notifyBeforeMin: 10 };
 export const STATUS = { relaxed: { label: '여유', tone: 'ok' }, tight: { label: '빠듯', tone: 'warn' }, late: { label: '지각 위험', tone: 'danger' } };
@@ -39,22 +41,24 @@ export function busTimes(trip, nowMin, untilMin) {
  * @param {object} p
  * @param {Array} p.trips  computeTrips 결과(노선별 etasSec, termMin, inVehicleMin, gate, congestion…)
  * @param {{name,start,building,room}} p.cls 오늘 첫 수업
- * @returns {{state:'ok'|'no-class'|'started'|'no-trip', pick?, status?, slackMin?, nextBus?}}
+ * @param {number} [p.personalOffsetMin] 내 걸음 반영(분, −5 ~ +15, 정수로 반올림해 씀)
+ * @returns {{state:'ok'|'no-class'|'started'|'no-trip', pick?, status?, slackMin?, nextBus?, personalMin?}}
  */
-export function recommend({ trips, cls, nowMin, walkTable, walkToStopMin = DEFAULTS.walkToStopMin, marginMin = DEFAULTS.marginMin }) {
+export function recommend({ trips, cls, nowMin, walkTable, walkToStopMin = DEFAULTS.walkToStopMin, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0 }) {
   if (!cls) return { state: 'no-class' };
   const start = toMin(cls.start);
   if (nowMin >= start) return { state: 'started', cls };
+  const personal = appliedOffset(personalOffsetMin);
   const cands = [];
   for (const trip of trips || []) {
     const walkMin = walkToBuilding(walkTable, cls.building, trip.gate);
     for (const b of busTimes(trip, nowMin, start)) {
       const departMin = b.boardMin - walkToStopMin;
       if (departMin < nowMin - 0.25) continue; // 지금 나가도 못 타는 차
-      cands.push({ trip, ...b, departMin, classArriveMin: b.boardMin + trip.inVehicleMin + walkMin });
+      cands.push({ trip, ...b, departMin, classArriveMin: b.boardMin + trip.inVehicleMin + walkMin + personal });
     }
   }
-  if (!cands.length) return { state: 'no-trip', cls };
+  if (!cands.length) return { state: 'no-trip', cls, personalMin: personal };
   const ok = cands.filter((c) => c.classArriveMin <= start - marginMin);
   const pick = ok.length
     ? ok.reduce((a, b) => (b.boardMin > a.boardMin + 1e-6 || (Math.abs(b.boardMin - a.boardMin) <= 1e-6 && b.classArriveMin < a.classArriveMin) ? b : a))
@@ -63,7 +67,7 @@ export function recommend({ trips, cls, nowMin, walkTable, walkToStopMin = DEFAU
   const status = slackMin >= marginMin ? 'relaxed' : slackMin >= 0 ? 'tight' : 'late';
   const nextSec = pick.trip.etasSec[0];
   return {
-    state: 'ok', cls, classStartMin: start, pick, status, slackMin,
+    state: 'ok', cls, classStartMin: start, pick, status, slackMin, personalMin: personal,
     departNow: pick.departMin <= nowMin + 0.5,
     nextBus: { no: pick.trip.no, inMin: Number.isFinite(nextSec) ? nextSec / 60 : null, isPick: pick.live && pick.order === 0, congestion: pick.trip.congestion },
   };

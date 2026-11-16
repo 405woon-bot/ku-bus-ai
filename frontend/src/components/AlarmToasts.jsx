@@ -5,12 +5,13 @@ const TONE = { danger: 'text-stop bg-stop-soft', warn: 'text-caution bg-caution-
 /**
  * 화면 알림(시스템 알림이 막혀 있어도 표시). 한 번에 하나만, 짧게.
  * 휴대폰: 하단 탭 바 바로 위(출발 시각 카드를 가리지 않게) · 넓은 화면: 오른쪽 위
+ * atTop: '도착했어요!' 버튼 시간에는 휴대폰에서도 위쪽에(아래쪽 ③ 카드의 버튼을 가리지 않게)
  */
-export default function AlarmToasts({ toasts, onDismiss, onSnooze }) {
+export default function AlarmToasts({ toasts, onDismiss, onSnooze, atTop = false }) {
   const t = toasts[0];
   if (!t) return null;
   return (
-    <div aria-live="assertive" className="pointer-events-none fixed inset-x-0 bottom-[calc(72px+env(safe-area-inset-bottom,0px))] z-40 flex justify-center px-4 md:bottom-auto md:top-[72px] md:justify-end md:pr-[max(24px,env(safe-area-inset-right,0px))]">
+    <div aria-live="assertive" data-place={atTop ? 'top' : 'bottom'} className={`pointer-events-none fixed inset-x-0 z-40 flex justify-center px-4 md:bottom-auto md:top-[72px] md:justify-end md:pr-[max(24px,env(safe-area-inset-right,0px))] ${atTop ? 'top-[calc(60px+env(safe-area-inset-top,0px))]' : 'bottom-[calc(72px+env(safe-area-inset-bottom,0px))]'}`}>
       <div key={t.id} role="alert" className="toast-in pointer-events-auto flex w-full max-w-[420px] items-start gap-3 rounded-2xl border border-line bg-panel py-3 pl-3.5 pr-2 shadow-pop">
         <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${TONE[t.tone] || 'bg-primary-soft text-primary'}`}>{t.tone === 'danger' || t.tone === 'warn' ? <IconAlert /> : <IconBell />}</span>
         <div className="min-w-0 flex-1">

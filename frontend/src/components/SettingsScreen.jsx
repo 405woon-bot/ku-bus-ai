@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { Button, Chip, IconChevron, IconCube, IconExternal, IconStop, SourceTag } from './ui.jsx';
 import PushPanel from './PushPanel.jsx';
+import KCardSettings from './KCardSettings.jsx';
 
 function Group({ title, children, note }) {
   const id = useId();
@@ -156,7 +157,7 @@ function ServerGroup({ mode, live, health, sync }) {
   );
 }
 
-export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, health }) {
+export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, health, kcard, onViewCard, onResetPersonal, highlightKCard, onResetAll }) {
   const { prefs } = state;
   const setPrefs = (patch) => dispatch({ type: 'setPrefs', patch });
   const [confirmReset, setConfirmReset] = useState(false);
@@ -176,6 +177,8 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
         <Item label="정류장까지 걸어서"><MinuteChips label="정류장까지 걷는 시간" value={prefs.walkToStopMin} options={[3, 5, 10, 15]} onChange={(m) => setPrefs({ walkToStopMin: m })} /></Item>
         <Item label="수업 전 도착 여유"><MinuteChips label="수업 시작 전 여유" value={prefs.marginMin} options={[0, 5, 10]} onChange={(m) => setPrefs({ marginMin: m })} /></Item>
       </Group>
+
+      {kcard && <KCardSettings mode={mode} kcard={kcard} personal={state.personal} arrivals={state.arrivals} onView={onViewCard} onReset={onResetPersonal} highlight={highlightKCard} />}
 
       <Group title="알림">
         <Item label="출발 알림" desc="출발 시각 전, 출발이 앞당겨질 때, 지각 위험일 때"><Switch label="출발 알림" checked={prefs.notify} onChange={(v) => setPrefs({ notify: v })} /></Item>
@@ -206,7 +209,7 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
 
       <div className="flex flex-wrap items-center gap-2 px-1 pb-4">
         {confirmReset
-          ? <><Button variant="danger" size="sm" onClick={() => { dispatch({ type: 'resetAll' }); setConfirmReset(false); }}>시간표·설정 모두 지우기</Button><Button size="sm" onClick={() => setConfirmReset(false)}>취소</Button></>
+          ? <><Button variant="danger" size="sm" onClick={() => { if (onResetAll) onResetAll(); else dispatch({ type: 'resetAll' }); setConfirmReset(false); }}>시간표·설정 모두 지우기</Button><Button size="sm" onClick={() => setConfirmReset(false)}>취소</Button></>
           : <Button variant="ghost" size="sm" onClick={() => setConfirmReset(true)}>처음 상태로 되돌리기</Button>}
       </div>
     </div>

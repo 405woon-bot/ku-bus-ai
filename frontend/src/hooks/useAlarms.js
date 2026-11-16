@@ -12,8 +12,9 @@ export const MOCK_NOTE = ' (예시 교통 데이터 기준 · 실시간 아님)'
  * - 한 번에 여러 개가 걸리면(예: 출발 10분 전 + 빠듯) 하나로 합쳐서 보냄
  * - 지난 출발 시각에 대한 알림은 화면에서 자동으로 치움
  * - mockData: 서울시 실시간 대신 예시 데이터로 계산한 추천 → 본문에 출처를 밝히고 따로 기록(실시간이 돌아오면 다시 알림)
+ * - arrived: 오늘 이 수업에 '도착했어요!'를 눌렀으면 출발 알림을 더 보내지 않고 떠 있는 것도 치움(서버 푸시도 같은 규칙)
  */
-export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false }) {
+export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false, arrived = false }) {
   const [toasts, setToasts] = useState([]);
   const sent = useRef(new Set());
   const snoozes = useRef([]);
@@ -27,7 +28,8 @@ export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false }
 
   useEffect(() => {
     // 지난 출발 시각 알림 치우기
-    setToasts((ts) => { const keep = ts.filter((t) => t.departMin == null || t.departMin >= now.minutes - 1); return keep.length === ts.length ? ts : keep; });
+    setToasts((ts) => { const keep = ts.filter((t) => (t.departMin == null || t.departMin >= now.minutes - 1) && !(arrived && t.type !== 'test')); return keep.length === ts.length ? ts : keep; });
+    if (arrived) { snoozes.current = []; return; }
     if (!prefs.notify || !rec || rec.state !== 'ok') return;
     const key = `${now.dateKey}:${rec.cls.id}${mockData ? ':mock' : ''}`;
     const fresh = [];
@@ -51,7 +53,7 @@ export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false }
       if (last.departMin == null || last.departMin >= now.minutes - 1) show({ ...last, title: `다시 알림 · ${last.title.replace(/^다시 알림 · /, '')}` }, 'snooze');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rec, qKey, prefs.notify, prefs.notifyBeforeMin, now.dateKey, mockData]);
+  }, [rec, qKey, prefs.notify, prefs.notifyBeforeMin, now.dateKey, mockData, arrived]);
 
   useEffect(() => { setToasts([]); snoozes.current = []; }, [now.dateKey]);
   const dismiss = useCallback((id) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
