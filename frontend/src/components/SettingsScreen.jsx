@@ -39,6 +39,25 @@ function incidentStatus(mode, inc, h) {
   return ['muted', '대기', '탑승 정류장을 고르면 경로 주변 돌발정보를 확인해요.'];
 }
 
+/** 설정 · 날씨(기상청) 줄: 서버 상태(health.weather)와 마지막 응답(live.weather)으로 */
+function weatherStatus(mode, wx, h) {
+  const obs = wx?.baseTime && /^\d{4}$/.test(wx.baseTime) ? `${wx.baseTime.slice(0, 2)}:${wx.baseTime.slice(2)}` : '';
+  if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 예시 날씨를 보여 줘요(실시간 아님). 비 · 눈일 때만 홈에 나와요.'];
+  if (wx?.source === 'mock') {
+    return ['muted', '예시 데이터', `버스 정보가 예시 데이터라 날씨도 예시로 보여 줘요(실시간 아님).${h && !h.keyConfigured ? ' 서버에 KMA_API_KEY도 없어요.' : ''}`];
+  }
+  if (h && !h.keyConfigured) return ['muted', '꺼짐', '서버에 KMA_API_KEY가 없어 꺼져 있어요.'];
+  if (wx?.source === 'error') return ['danger', '오류', `${wx.message || '기상청 날씨를 받지 못했어요.'} 날씨만 빼고 보여 줘요.`];
+  if (wx?.source === 'loading') return ['muted', '불러오는 중', '기상청 날씨를 처음 받는 중이에요.'];
+  const grid = h?.grid ? `(${h.grid.nx} · ${h.grid.ny})` : '';
+  if (wx?.source === 'kma') {
+    return wx.stale ? ['warn', `직전 값 · ${obs} 관측`, `기상청 연결이 잠시 끊겨 ${Math.max(1, Math.round((wx.ageSec || 0) / 60))}분 전 정보를 보여 줘요.`]
+      : ['ok', `연결됨 · ${obs} 관측`, `국민대 격자${grid} 실황을 ${Math.round((h?.cacheSec || 600) / 60)}분마다 받아요. 비 · 눈일 때만 홈에 보여 줘요.`];
+  }
+  if (h?.lastError && !h?.lastOkAt) return ['danger', '오류', h.lastError.message];
+  return ['muted', '대기', '탑승 정류장을 고르면 국민대 날씨를 확인해요.'];
+}
+
 /** 분 단위 선택 칩 */
 function MinuteChips({ label, value, options, onChange }) {
   return (
@@ -78,6 +97,7 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
       : push.state === 'error' ? push.message : '창을 닫아도 출발 알림을 받아요.';
   const label = { off: '서버 푸시 켜기', working: '켜는 중…', on: '다시 등록', error: '다시 시도' }[push.state] || '서버 푸시 켜기';
   const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents);
+  const [wxLevel, wxText, wxDesc] = weatherStatus(mode, live?.weather, health?.weather);
   return (
     <Group title="데이터 · 서버 연결">
       <Item label="실시간 데이터" desc={srcDesc}>
@@ -85,6 +105,9 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
       </Item>
       <Item label="돌발정보" desc={incDesc}>
         <span data-testid="incident-status"><Chip level={incLevel}>{incText}</Chip></span>
+      </Item>
+      <Item label="날씨(기상청)" desc={wxDesc}>
+        <span data-testid="weather-status"><Chip level={wxLevel}>{wxText}</Chip></span>
       </Item>
       <Item label="서버 동기화" desc="시간표·정류장·설정을 서버에 저장해요. 서버가 이 값으로 알림을 계산해요.">
         <Chip level={syncLevel}>{syncText}</Chip>

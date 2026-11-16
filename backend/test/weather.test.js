@@ -110,12 +110,26 @@ test('실패해도 앱은 그대로: 90분 이내 직전 값 → 그보다 오�
   assert.equal(svc.health().lastError, null);
 });
 
+test('실제 응답(2026-11-17 00:00 관측, 국민대 격자)을 그대로 넣으면 받은 값과 똑같이 정리됨', async () => {
+  const REAL_RAW = { PTY: '0', REH: '65', RN1: '0', T1H: '11.7', UUU: '-1.8', VEC: '52', VVV: '-1.4', WSD: '2.4' };
+  const items = Object.entries(REAL_RAW).map(([category, obsrValue]) => ({ baseDate: '20261117', baseTime: '0000', category, nx: 60, ny: 128, obsrValue }));
+  const fetchImpl = fakeKmaFetch({ fail: () => ({ ok: true, status: 200, text: async () => ncstJson(items) }) });
+  const clock = { t: new Date('2026-11-16T15:14:47Z').getTime() }; // 서울 11-17 00:14
+  const svc = createWeatherService({ env: { KMA_API_KEY: KEY }, fetchImpl, clock: () => clock.t });
+  const w = await svc.inspect(new Date(clock.t));
+  assert.deepEqual(
+    [w.source, w.baseDate, w.baseTime, w.obsAt, w.pty, w.ptyText, w.rn1Mm, w.t1h, w.reh, w.wsd, w.wet, w.grid, w.raw, w.formatVerified],
+    ['kma', '20261117', '0000', 1794841200000, 0, '없음', 0, 11.7, 65, 2.4, false, { nx: 60, ny: 128 }, REAL_RAW, true],
+  );
+  assert.deepEqual(fetchImpl.calls.map((u) => [u.searchParams.get('base_date'), u.searchParams.get('base_time')]), [['20261117', '0000']], '00:14에는 00:00 자료를 바로 받음');
+});
+
 test('형식이 예상과 다르면(PTY · RN1 없음) 날씨만 빠지고 이유가 남음', async () => {
   const fetchImpl = fakeKmaFetch({ fail: () => ({ ok: true, status: 200, text: async () => ncstJson([{ baseDate: '20261109', baseTime: '0800', category: 'T1H', obsrValue: '7' }]) }) });
   const { svc, now } = service({ fetchImpl });
   const w = await svc.forView(now());
   assert.deepEqual([w.source, w.reason], ['error', 'format']);
-  assert.match(w.message, /확인 필요/);
+  assert.match(w.message, /날씨만 빼고/);
 });
 
 test('키 보호 · 키 없음: 오류 · 상태 어디에도 인증키가 없고, 키가 없으면 꺼짐(off) · 버스도 예시면 예시 날씨(mock)', async () => {
@@ -141,7 +155,7 @@ test('확인용 /api/weather: 격자 · 원문(raw) · 형식 미확인 표시 /
   const get = async (p) => (await fetch(`http://127.0.0.1:${srv.address().port}${p}`)).json();
   try {
     const wx = await get('/api/weather');
-    assert.deepEqual([wx.source, wx.grid, wx.ptyText, wx.rn1Mm, wx.formatVerified], ['kma', { nx: 60, ny: 128 }, '비', 1.5, false]);
+    assert.deepEqual([wx.source, wx.grid, wx.ptyText, wx.rn1Mm, wx.formatVerified], ['kma', { nx: 60, ny: 128 }, '비', 1.5, true]);
     assert.deepEqual([wx.raw.PTY, wx.raw.RN1, wx.raw.T1H], ['1', '1.5', '7.2']);
     const trips = await get('/api/stops/08901/trips');
     assert.deepEqual([trips.source, trips.weather.source, trips.weather.wet, trips.weather.raw], ['seoul', 'kma', true, undefined]);

@@ -1,8 +1,9 @@
 // 기상청 단기예보 조회서비스 · 초단기실황조회(getUltraSrtNcst) 해석 — 서버와 화면이 같이 씁니다.
 //
-// ※ 응답 형식 '확인 필요': 아직 실제 응답을 받아 보지 못했습니다. 아래는 공공데이터포털 · 기상청 활용 안내와 공개된 예제를 따른 것이고,
-//   값이 예상과 다르면(항목이 없거나 숫자가 아니면) 그 값은 null로 두고, 강수형태 · 강수량을 둘 다 못 읽으면 날씨를 통째로 뺍니다.
-//   예상 형식: response.header.resultCode('00') · response.body.items.item[] = { baseDate, baseTime, category, nx, ny, obsrValue }
+// ※ 응답 형식: 실제 응답으로 확인함(2026-11-17 00:00 관측, 국민대 격자 60 · 128, 00:14에 받음)
+//   response.header.resultCode('00') · response.body.items.item[] = { baseDate, baseTime, category, nx, ny, obsrValue(문자열) }
+//   실제 값: PTY "0" · RN1 "0" · T1H "11.7" · REH "65" · WSD "2.4" · UUU "-1.8" · VVV "-1.4" · VEC "52"
+//   그래도 값이 예상과 다르면(항목이 없거나 숫자가 아니면) 그 값은 null로 두고, 강수형태 · 강수량을 둘 다 못 읽으면 날씨를 통째로 뺍니다.
 //   category: T1H 기온(℃) · RN1 1시간 강수량(mm) · PTY 강수형태(코드) · REH 습도(%) · WSD 풍속(m/s) · UUU · VVV · VEC
 //   결측: +900 이상 · -900 이하 값
 
@@ -32,7 +33,7 @@ const HOUR = 3600_000;
 const p2 = (n) => String(n).padStart(2, '0');
 const kstParts = (ms) => { const d = new Date(ms + 9 * HOUR); return { date: `${d.getUTCFullYear()}${p2(d.getUTCMonth() + 1)}${p2(d.getUTCDate())}`, hh: d.getUTCHours() }; };
 /**
- * 초단기실황은 매시 정시 자료. 제공 시작 시각이 안내마다 달라(10분 · 40분 뒤) '확인 필요' —
+ * 초단기실황은 매시 정시 자료. 제공 시작 시각이 안내마다 달라(10분 · 40분 뒤) — 실제로 00:14에 00:00 자료를 받음 —
  * 지금에서 lagMin(기본 10분)을 뺀 시각의 정시를 먼저 부르고, 자료가 없으면(NODATA) 한 시간 전을 부릅니다(prevBase).
  * @returns {{ baseDate:string, baseTime:string }}
  */
@@ -56,7 +57,7 @@ const num = (v) => {
   return Number.isFinite(n) && n > -900 && n < 900 ? n : null; // ±900 넘으면 결측
 };
 /**
- * 1시간 강수량 → mm(숫자). 실황은 '0' · '1.5' 같은 숫자로 온다고 안내되어 있고(확인 필요),
+ * 1시간 강수량 → mm(숫자). 실황은 '0' 같은 숫자 글로 옴(실제 응답에서 확인),
  * 예보식 글('강수없음' · '1mm 미만' · '30.0~50.0mm' · '50.0mm 이상')이 와도 읽습니다. 못 읽으면 null.
  */
 export function parseRn1(v) {
@@ -91,6 +92,13 @@ export function summarizeNcst(items) {
     wet: (pty !== null && pty !== 0) || (rn1Mm !== null && rn1Mm > 0), raw,
   };
 }
+
+/** 관측 시각 'HH:MM'(baseTime 기준) */
+export const obsTime = (w) => (/^\d{4}$/.test(String(w?.baseTime ?? '')) ? `${w.baseTime.slice(0, 2)}:${w.baseTime.slice(2)}` : '');
+/** 강수 종류: 강수형태가 있으면 그 이름, 강수형태 없이 강수량만 있으면 '비' */
+export const wxKind = (w) => (w?.pty && w.pty !== 0 ? w.ptyText : '비');
+/** 홈 화면 한 줄 제목: '비 오는 중 · 1시간 0.5mm' */
+export const wxHeadline = (w) => `${wxKind(w)} 오는 중${w?.rn1Mm ? ` · 1시간 ${w.rn1Mm}mm` : ''}`;
 
 /** 짧은 글: '비 · 1시간 1.5mm' / '강수 없음' / '눈 · 1시간 0.5mm' */
 export function weatherText(w) {

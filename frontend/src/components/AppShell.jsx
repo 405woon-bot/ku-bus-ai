@@ -1,6 +1,6 @@
 import { DAYS, toHHMM } from '@shared/time.js';
 import { IconBus, IconCalendar, IconHome, IconReplay, IconSettings } from './ui.jsx';
-import { PREVIEW_INCIDENTS, PREVIEW_SOURCES } from '../hooks/useTrips.js';
+import { PREVIEW_INCIDENTS, PREVIEW_SOURCES, PREVIEW_WEATHER } from '../hooks/useTrips.js';
 
 export const TABS = [
   { id: 'home', label: '홈', Icon: IconHome },
@@ -82,6 +82,14 @@ export function PreviewBar({ preview, dispatch }) {
           {Object.entries(PREVIEW_INCIDENTS).map(([id, label]) => (
             <button key={id} type="button" aria-pressed={(preview.incidents || 'all') === id} onClick={() => dispatch({ type: 'setPreview', patch: { incidents: id } })}
               className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.incidents || 'all') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
+          ))}
+        </span>
+        {/* 예시 날씨(비 · 눈 · 맑음) — 비 · 눈일 때만 홈의 '경로 주변' 줄에 날씨가 붙습니다 */}
+        <span className="flex w-full items-center gap-1 md:w-auto" role="group" aria-label="미리보기 날씨">
+          <span className="mr-0.5 whitespace-nowrap font-semibold text-ink">날씨 보기</span>
+          {Object.entries(PREVIEW_WEATHER).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={(preview.weather || 'rain') === id} onClick={() => dispatch({ type: 'setPreview', patch: { weather: id } })}
+              className={`h-7 min-w-[40px] whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.weather || 'rain') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
           ))}
         </span>
       </div>

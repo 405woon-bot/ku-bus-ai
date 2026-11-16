@@ -5,5 +5,6 @@ export const SAMPLE_WEEKDAY = 0;
 export const sampleSearch = () => [];
 export const sampleTrips = () => [];
 export const sampleIncidents = () => null;
+export const sampleWeather = () => null;
 export const SAMPLE_COURSE_META = null;
 export const searchSampleCourses = () => [];

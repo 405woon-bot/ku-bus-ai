@@ -7,6 +7,8 @@ import { searchCourses } from '@shared/courses.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '@shared/samples/sampleCourses.js';
 import { kstMidnight, matchIncidents, normalizeAcc } from '@shared/incidents.js';
 import { sampleIncidentRows } from '@shared/samples/incidentSample.js';
+import { summarizeNcst } from '@shared/weather.js';
+import { sampleNcstItems } from '@shared/samples/weatherSample.js';
 
 export { SAMPLE_COURSE_META };
 /** 미리보기 수업 검색: 샘플 강의에서 찾음(실제 강의 목록 아님) */
@@ -47,4 +49,14 @@ export function sampleIncidents(trips, minutes, scenario = 'all', busSource = 's
   const items = matchIncidents(sampleIncidentRows(nowMs, scenario).map(normalizeAcc).filter(Boolean), { trips, nowMs });
   const mock = busSource === 'mock';
   return { source: mock ? 'mock' : 'sample', reason: 'example', items: mock ? items.slice(0, 1) : items, nowMs };
+}
+
+/**
+ * 미리보기 예시 날씨: 기상청 초단기실황 항목 형식의 예시 값 → 실제 서비스와 같은 해석(shared/weather.js). 실시간 아님.
+ * @param {'rain'|'snow'|'clear'} kind
+ */
+export function sampleWeather(minutes, kind = 'rain', busSource = 'seoul') {
+  const nowMs = kstMidnight(Date.now()) + Math.round(minutes * 60_000);
+  const { raw, ...w } = summarizeNcst(sampleNcstItems(nowMs, kind));
+  return { source: busSource === 'mock' ? 'mock' : 'sample', reason: 'example', ...w, nowMs };
 }

@@ -5,7 +5,7 @@
 //   인증키: 공공데이터포털 일반 인증키(Encoding · Decoding 둘 다 가능) → 서버 환경변수 KMA_API_KEY에만 둡니다.
 //   호출 아끼기: 결과를 10분(WEATHER_CACHE_SEC, 600~1800초)마다 한 번만 새로 받아 모든 요청이 나눠 씀 → 하루 최대 약 300회(한도 10,000).
 //   실패: 90분 이내 직전 값(stale) → 그보다 오래되면 날씨를 빼고(error) 앱은 그대로. 실패 뒤 5분 · 호출 한도 초과 뒤 1시간은 다시 부르지 않음.
-//   ※ 응답 형식 '확인 필요' — 실제 응답을 받기 전이라 JSON · XML · 공공데이터포털 오류 응답을 모두 받아 들이고,
+//   응답 형식: 실제 응답으로 확인함(2026-11-17, dataType=JSON). 그래도 XML · 공공데이터포털 오류 응답을 모두 받아 들이고,
 //     예상과 다르면 날씨만 생략합니다(shared/weather.js의 summarizeNcst).
 import { KU_GRID, ncstBase, prevBase, summarizeNcst } from '../../../shared/weather.js';
 import { sampleNcstItems } from '../../../shared/samples/weatherSample.js';
@@ -120,7 +120,7 @@ export function createWeatherService({ env = process.env, fetchImpl = globalThis
     }
     if (!items?.length) items = await call(prevBase(b)); // 정시 자료가 아직 없으면(NODATA · 빈 목록) 한 시간 전
     const w = summarizeNcst(items);
-    if (!w) throw new WeatherApiError('format', '기상청 응답에서 강수형태(PTY) · 1시간 강수량(RN1)을 찾지 못했어요(응답 형식 확인 필요)');
+    if (!w) throw new WeatherApiError('format', '기상청 응답에서 강수형태(PTY) · 1시간 강수량(RN1)을 찾지 못했어요(평소와 다른 응답 — 날씨만 빼고 보여 줘요)');
     return { at: clock(), w };
   }
 
@@ -179,7 +179,7 @@ export function createWeatherService({ env = process.env, fetchImpl = globalThis
   /** 확인용(/api/weather): 화면용 값 + 받은 항목 원문(raw) — 응답 형식을 눈으로 확인할 때 */
   async function inspect(nowDate = new Date(clock())) {
     const v = await forView(nowDate);
-    return v.source === 'kma' ? { ...v, raw: st.last?.w?.raw ?? null, formatVerified: false } : { ...v, grid: { nx, ny }, formatVerified: false };
+    return v.source === 'kma' ? { ...v, raw: st.last?.w?.raw ?? null, formatVerified: true } : { ...v, grid: { nx, ny }, formatVerified: true };
   }
 
   return {
@@ -191,7 +191,7 @@ export function createWeatherService({ env = process.env, fetchImpl = globalThis
         keyConfigured: Boolean(raw), grid: { nx, ny }, cacheSec: cacheMs / 1000, lastOkAt: iso(st.last?.at),
         lastObs: st.last ? `${st.last.w.baseDate} ${st.last.w.baseTime}` : null, wet: st.last?.w?.wet ?? null,
         lastError: st.lastError && { ...st.lastError, at: iso(st.lastError.at) }, retryAfter: st.until > clock() ? iso(st.until) : null,
-        calls: st.calls, formatVerified: false,
+        calls: st.calls, formatVerified: true,
       };
     },
   };

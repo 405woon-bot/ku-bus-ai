@@ -88,7 +88,7 @@ function FallbackNotice({ reason }) {
 const nextDayText = (c) => (c ? `다음 등교: ${DAYS[c.day]}요일 ${c.start} ${c.name}` : '시간표 탭에서 수업을 등록해 주세요.');
 
 /**
- * 홈: ① 출발 추천 시각 ② 실시간 버스 도착 + 도로 정체 (+ 경로 주변 돌발정보 한 줄) ③ 강의실 도착 예정 + 상태.
+ * 홈: ① 출발 추천 시각 ② 실시간 버스 도착 + 도로 정체 (+ 경로 주변 날씨 · 돌발정보 한 줄) ③ 강의실 도착 예정 + 상태.
  * 계산 과정(도보·차내 시간 내역, 공식)은 보여 주지 않습니다.
  */
 export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, onPickStop, onSelectStop, onGoTimetable }) {
@@ -161,15 +161,15 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
           <span className="num">{t.no}</span>번 버스 {arrival}
         </InfoCard>
 
-        {/* 경로 주변 돌발정보: 실시간이면 버스 카드 바로 아래, 예시 데이터면 세 카드 다음(첫 화면 3요소를 밀어내지 않게) */}
-        {!mock && <IncidentStrip data={live?.incidents} congestion={rec.nextBus.congestion} />}
+        {/* 경로 주변 날씨(비 · 눈일 때만) · 돌발정보: 실시간이면 버스 카드 바로 아래, 예시 데이터면 세 카드 다음(첫 화면 3요소를 밀어내지 않게) */}
+        {!mock && <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />}
 
         <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />} caption="강의실 도착"
           tag={<Signal tone={st.tone}>{st.label}</Signal>}
           sub={`${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`}>
           <span className="num">{toHHMM(p.classArriveMin)}</span> 강의실 도착 예정
         </InfoCard>
-        {mock && <IncidentStrip data={live?.incidents} congestion={rec.nextBus.congestion} />}
+        {mock && <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />}
       </>
     );
   }

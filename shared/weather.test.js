@@ -1,7 +1,7 @@
 // 실행: node --test shared/weather.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KU_GRID, PTY_TEXT, latLonToGrid, ncstBase, parseRn1, prevBase, summarizeNcst, weatherText } from './weather.js';
+import { KU_GRID, PTY_TEXT, latLonToGrid, ncstBase, obsTime, parseRn1, prevBase, summarizeNcst, weatherText, wxHeadline, wxKind } from './weather.js';
 import { KU_POINT, kstMs } from './incidents.js';
 import { sampleNcstItems } from './samples/weatherSample.js';
 
@@ -55,4 +55,15 @@ test('예시 날씨(실시간 아님): 지금 발표 시각 · 국민대 격자 
   assert.deepEqual([rain.ptyText, rain.rn1Mm, rain.baseTime, rain.wet], ['비', 1.5, '0800', true]);
   assert.equal(summarizeNcst(sampleNcstItems(now, 'clear')).wet, false);
   assert.equal(PTY_TEXT[summarizeNcst(sampleNcstItems(now, 'snow')).pty], '눈');
+});
+
+test('화면 문구: 관측 시각 · 강수 종류 · 한 줄 제목 (실제 응답 값 포함)', () => {
+  const real = summarizeNcst(Object.entries({ PTY: '0', REH: '65', RN1: '0', T1H: '11.7', UUU: '-1.8', VEC: '52', VVV: '-1.4', WSD: '2.4' })
+    .map(([category, obsrValue]) => ({ baseDate: '20261117', baseTime: '0000', category, nx: 60, ny: 128, obsrValue })));
+  assert.deepEqual([real.wet, real.t1h, real.reh, obsTime(real), weatherText(real)], [false, 11.7, 65, '00:00', '강수 없음']);
+  const drizzle = summarizeNcst([item('PTY', '0'), item('RN1', '0.5')]);
+  assert.deepEqual([drizzle.wet, wxKind(drizzle), wxHeadline(drizzle), obsTime(drizzle)], [true, '비', '비 오는 중 · 1시간 0.5mm', '08:00']);
+  const snow = summarizeNcst([item('PTY', '3', '0700'), item('RN1', '0', '0700')]);
+  assert.deepEqual([wxKind(snow), wxHeadline(snow), obsTime(snow)], ['눈', '눈 오는 중', '07:00']);
+  assert.equal(obsTime({ baseTime: '' }), '');
 });
