@@ -15,6 +15,7 @@ import { toHHMM, toMin } from '../../shared/time.js';
 import { searchCourses } from '../../shared/courses.js';
 import { loadCourses } from './courses.js';
 import { createAccidentService } from './transit/seoulAccident.js';
+import { createWeatherService } from './transit/kmaWeather.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
@@ -33,8 +34,9 @@ function validClass(c, i) {
 /**
  * 테스트에서 시계·공급자를 바꿔 끼울 수 있게 앱을 함수로 만듭니다. provider = createLiveService() 또는 createMockProvider()
  * incidents = createAccidentService() — 서울시 돌발정보(없으면 돌발정보 기능 꺼짐)
+ * weather = createWeatherService() — 기상청 초단기실황(없으면 날씨 꺼짐)
  */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -49,6 +51,7 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       push: { enabled: pusher.enabled, vapidConfigured: Boolean(pusher.publicKey), subscriptions },
       scheduler: scheduler?.status?.() ?? null,
       incidents: incidents?.health?.() ?? { keyConfigured: false },
+      weather: weather?.health?.() ?? { keyConfigured: false },
     });
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));
@@ -112,13 +115,23 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   });
   // 탑승 정류장 → 국민대행 노선별 실시간 도착·차내 시간·정체(화면이 20초마다 호출). 실패하면 직전 값 또는 예시 데이터 + 이유
   // + 경로 주변 서울시 돌발정보(incidents). 버스가 예시 데이터면 예시 돌발정보(source 'mock'), 키가 없으면 source 'off'
+  // + 국민대 격자 지금 날씨(weather, 기상청 초단기실황). 실패하면 source 'error'로 알리고 날씨만 빠짐
   app.get('/api/stops/:arsId/trips', async (req, res) => {
     const arsId = clean(req.params.arsId, 10);
     if (!ARS_ID.test(arsId)) return res.status(400).json({ error: '정류장 번호(arsId)는 숫자 5자리예요' });
     let r;
     try { r = await provider.stopTrips(arsId, now()); } catch (e) { return res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
-    const inc = incidents ? await incidents.forTrips(r.trips, now(), { example: r.source === 'mock' }) : { source: 'off', reason: 'no-service', items: [] };
-    res.json({ ...r, incidents: inc });
+    const example = r.source === 'mock';
+    const [inc, wx] = await Promise.all([
+      incidents ? incidents.forTrips(r.trips, now(), { example }) : { source: 'off', reason: 'no-service', items: [] },
+      weather ? weather.forView(now(), { example }).catch(() => ({ source: 'error', reason: 'api' })) : { source: 'off', reason: 'no-service' },
+    ]);
+    res.json({ ...r, incidents: inc, weather: wx });
+  });
+  // 날씨 확인용: 국민대 격자(nx, ny) · 지금 강수형태 · 1시간 강수량 · 받은 항목 원문(raw). 응답 형식 확인에 씁니다(인증키는 나오지 않음)
+  app.get('/api/weather', async (_req, res) => {
+    if (!weather) return res.json({ source: 'off', reason: 'no-service' });
+    try { res.json(await weather.inspect(now())); } catch (e) { res.json({ source: 'error', reason: 'api', message: e.message }); }
   });
 
   // v0.3 노선별 설정(/api/live 호환)
@@ -198,9 +211,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label' });
   const courses = loadCourses(env.COURSES_FILE || undefined);
   const incidents = createAccidentService({ env, clock: () => now().getTime() });
-  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents });
+  const weather = createWeatherService({ env, clock: () => now().getTime() });
+  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather });
   const port = Number(env.PORT) || 8787;
-  const h = provider.health(), ih = incidents.health();
-  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 푸시: ${pusher.enabled ? '켜짐' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
+  const h = provider.health(), ih = incidents.health(), wh = weather.health();
+  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 푸시: ${pusher.enabled ? '켜짐' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
 }

@@ -4,8 +4,9 @@
 v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)에 v0.3의 서울시 실시간 연동(검증한 응답 해석 · 캐시 · 예시 데이터 전환 · 출처 배지 · 서버 푸시)을 합쳤고,
 v0.5는 시간표 탭에 **수업 검색으로 자동 등록**(수강신청 사이트 공개 강좌조회 → `courses.json`)을 더했습니다.
 
-- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
+- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY` · 날씨 `KMA_API_KEY`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
 - **경로 주변 돌발정보:** 서울 열린데이터광장 실시간 돌발정보(AccInfo)에서 교통사고 · 공사 · 버스사고 · 기상/재난 · 집회및행사 중 통학 경로 300m · 국민대 1km 안의 것만 홈 화면 버스 카드 아래 한 줄로 보여 줍니다(서버가 5분에 한 번만 받아 나눠 씀). 원인이라고 단정하지 않고 "정체 원인일 수 있어요"라고만 씁니다.
+- **날씨(서버만, 화면 표시는 다음 단계):** 기상청 초단기실황으로 국민대 격자(nx 60 · ny 128)의 강수형태(PTY) · 1시간 강수량(RN1)을 10분에 한 번만 받습니다. 응답 형식은 실제 응답으로 **확인 필요** — 예상과 다르면 날씨만 빠지고 앱은 그대로입니다. 확인용 `/api/weather`.
 - **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을, "돌발 보기"로 예시 돌발정보(공사+행사 / 행사만 / 없음)를 바꿔 볼 수 있습니다.
 - **기술:** React 18.3 · Vite 5.4 · Tailwind CSS 3.4 / Node.js 20.6+ · Express 4.21 · web-push 3.6 / (선택) Redis
 
@@ -68,6 +69,9 @@ cd frontend && npm install && npm run build && npm run build:preview
 | `MOCK_SCENARIO` · `PUSH_WHEN_MOCK` | `jeongneung` · `label` | 실패 시 예시 데이터 시나리오 · 예시 기준 푸시를 표시하고 보낼지(`label`) 안 보낼지(`skip`) |
 | `SEOUL_ACCIDENT_API_KEY` | (없음) | 서울 열린데이터광장 인증키(버스 키와 다름). 비우면 돌발정보 꺼짐. 서버 전용 |
 | `ACCIDENT_CACHE_SEC` | `300` | 서울 전체 돌발정보를 다시 받는 간격(초, 최소 60). 실패하면 15분 이내 직전 값 |
+| `KMA_API_KEY` | (없음) | 공공데이터포털 일반 인증키(기상청 단기예보 조회서비스, Encoding · Decoding 모두 가능). 비우면 날씨 꺼짐. 서버 전용 |
+| `WEATHER_CACHE_SEC` | `600` | 날씨를 다시 받는 간격(초, 600~1800). 실패하면 90분 이내 직전 값, 실패 뒤 5분 · 한도 초과 뒤 1시간 쉼 |
+| `KMA_NX` · `KMA_NY` | `60` · `128` | (선택) 기상청 격자. 기본은 국민대(정릉동) |
 | `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | (없음) | 서버 푸시 |
 | `DATA_FILE` | `./data/db.json` | 사용자 데이터(JSON 파일) |
 
@@ -166,12 +170,13 @@ python tools/fetch_courses.py --raw raw.json                   # 받은 원본�
 |---|---|---|
 | GET | `/api/stops?q=` | 정류장 이름 검색(2글자 이상). 키 없음 · 한도 503 |
 | GET | `/api/stops/near?lat=&lon=` | 내 주변 정류장(반경 400 m, 가까운 순) |
-| GET | `/api/stops/:arsId/trips` | 국민대행 노선별 `etasSec` · `termMin` · `inVehicleMin` · `gate` · `congestion` · `cause` · `path` + `source` · `reason` · `stale` · `ageSec` + 경로 주변 돌발정보 `incidents`(`source` seoul/mock/off/error · `items`) |
+| GET | `/api/stops/:arsId/trips` | 국민대행 노선별 `etasSec` · `termMin` · `inVehicleMin` · `gate` · `congestion` · `cause` · `path` + `source` · `reason` · `stale` · `ageSec` + 경로 주변 돌발정보 `incidents`(`source` seoul/mock/off/error · `items`) + 날씨 `weather`(`source` kma/mock/off/error · `ptyText` · `rn1Mm` · `t1h` · `wet`) |
+| GET | `/api/weather` | (확인용) 국민대 격자 지금 날씨 + 받은 항목 원문 `raw` · `formatVerified` |
 | GET · PATCH | `/api/me` | 시간표 · 탑승 정류장 · 설정(`X-User-Id` 헤더, 데모 수준 식별). 정류장 번호는 5자리 |
 | PUT | `/api/me/timetable` · POST `/api/me/timetable/import-text` | 시간표 저장 · 텍스트 해석 |
 | GET | `/api/plan` | 서버 쪽 추천(화면과 같은 계산) + 지금 보낼 알림 |
 | GET | `/api/courses?q=&limit=` · `/api/courses/meta` | 수업 검색(과목명 · 교수명 · 과목번호, 최대 50개) · 강의 목록 정보(학기 · 개수 · 받은 날). 목록이 없으면 503 안내 |
-| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) |
+| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) · 날씨(`weather`: 키 여부 · 격자 · 마지막 관측 · 오류) |
 | GET/POST | `/api/push/key` · `/api/push/subscribe` | Web Push(VAPID) |
 | GET | `/api/live?routes=` · `/api/routes/:no/stations` · PATCH `/api/me/settings` | v0.3 노선별 API(호환용, 화면은 쓰지 않음) |
 

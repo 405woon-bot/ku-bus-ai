@@ -75,6 +75,13 @@ with sync_playwright() as p:
     trips = api(ctx, 8801, uid, 'GET', '/api/stops/08901/trips')
     check('API: /api/stops/08901/trips에 incidents(seoul, 2건)', trips['incidents']['source'] == 'seoul' and [x['id'] for x in trips['incidents']['items']] == ['T-WORK', 'T-EVENT'], str(trips['incidents'])[:200])
     strip.get_by_role('button').click()
+    # 기상청 초단기실황(가짜 응답): 서버에서만 부르고, 국민대 격자 60 · 128
+    wx = api(ctx, 8801, uid, 'GET', '/api/weather')
+    check('API: /api/weather = 기상청 · 격자 60,128 · 비 1.5mm · 원문(raw)', wx.get('source') == 'kma' and wx.get('grid') == {'nx': 60, 'ny': 128}
+          and wx.get('ptyText') == '비' and wx.get('rn1Mm') == 1.5 and (wx.get('raw') or {}).get('PTY') == '1', str(wx)[:200])
+    check('API: trips 응답에 weather(kma) · 원문 없음', trips.get('weather', {}).get('source') == 'kma' and 'raw' not in trips['weather'], str(trips.get('weather'))[:160])
+    h = api(ctx, 8801, uid, 'GET', '/api/health')
+    check('API: /api/health 날씨 상태(키 있음 · 마지막 관측)', h['weather']['keyConfigured'] and h['weather']['lastObs'] is not None and 'E2E-KMA-KEY' not in str(h), str(h['weather'])[:160])
     me = api(ctx, 8801, uid, 'GET', '/api/me')
     check('서버에 탑승 정류장 저장', (me.get('stop') or {}).get('arsId') == '08901', str(me.get('stop')))
     pg.screenshot(path=str(OUT / 'live_desktop_home.png'))
@@ -147,6 +154,9 @@ with sync_playwright() as p:
     check('키 없음: 서버 푸시 키(VAPID) 없음 안내', pg.get_by_text('VAPID').count() >= 1)
     inc = flat(pg.locator('[data-testid="incident-status"]').inner_text())
     check('키 없음: 설정 돌발정보 = 예시 데이터 + 키 없음 안내', inc == '예시 데이터' and pg.get_by_text('SEOUL_ACCIDENT_API_KEY도 없어요').count() == 1, inc)
+    wx = api(ctx, 8802, uid2, 'GET', '/api/weather')
+    tr = api(ctx, 8802, uid2, 'GET', '/api/stops/08901/trips')
+    check('키 없음: /api/weather 꺼짐(off) · trips 날씨는 예시(mock)', wx.get('source') == 'off' and tr.get('weather', {}).get('source') == 'mock', f"{wx} / {str(tr.get('weather'))[:80]}")
     pg.get_by_role('link', name='시간표').first.click()
     pg.locator('section[aria-label="수업 검색"] input[type="search"]').fill('회로')
     pg.wait_for_selector('text=fetch_courses.py', timeout=5000)
