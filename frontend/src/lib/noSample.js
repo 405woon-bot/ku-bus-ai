@@ -6,5 +6,6 @@ export const sampleSearch = () => [];
 export const sampleTrips = () => [];
 export const sampleIncidents = () => null;
 export const sampleWeather = () => null;
+export const sampleExplain = (trips) => trips;
 export const SAMPLE_COURSE_META = null;
 export const searchSampleCourses = () => [];

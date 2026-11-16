@@ -4,10 +4,11 @@
 v0.4는 v0.2의 화면 디자인(홈 3요소 · 탭 · 탑승 정류장 하나)에 v0.3의 서울시 실시간 연동(검증한 응답 해석 · 캐시 · 예시 데이터 전환 · 출처 배지 · 서버 푸시)을 합쳤고,
 v0.5는 시간표 탭에 **수업 검색으로 자동 등록**(수강신청 사이트 공개 강좌조회 → `courses.json`)을 더했습니다.
 
-- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY` · 날씨 `KMA_API_KEY`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
+- **배포(Render):** Root Directory `backend` · Build `npm install` · Start `npm start` · 환경 변수 `SEOUL_BUS_API_KEY` (+ 돌발정보 `SEOUL_ACCIDENT_API_KEY` · 날씨 `KMA_API_KEY` · AI 설명 `GEMINI_API_KEY`). 화면은 빌드된 `frontend/dist`가 저장소에 들어 있어 Render에서 따로 빌드하지 않습니다.
 - **경로 주변 돌발정보:** 서울 열린데이터광장 실시간 돌발정보(AccInfo)에서 교통사고 · 공사 · 버스사고 · 기상/재난 · 집회및행사 중 통학 경로 300m · 국민대 1km 안의 것만 홈 화면 버스 카드 아래 한 줄로 보여 줍니다(서버가 5분에 한 번만 받아 나눠 씀). 원인이라고 단정하지 않고 "정체 원인일 수 있어요"라고만 씁니다.
 - **날씨:** 기상청 초단기실황으로 국민대 격자(nx 60 · ny 128)의 강수형태(PTY) · 1시간 강수량(RN1)을 서버가 10분에 한 번만 받습니다(응답 형식은 실제 응답으로 확인). **비 · 눈이 올 때만** 홈 화면 '경로 주변' 줄에 함께 보여 주고, 못 받으면 날씨만 빠지고 앱은 그대로입니다. 확인용 `/api/weather`.
-- **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을, "돌발 보기"로 예시 돌발정보(공사+행사 / 행사만 / 없음)를, "날씨 보기"로 예시 날씨(비 / 눈 / 맑음)를 바꿔 볼 수 있습니다.
+- **왜 늦나요?(v0.9):** 추천 버스가 **보통 · 혼잡**일 때만 버스 카드 바로 아래(‘경로 주변’ 줄 자리)에 한 줄 설명을 보여 줍니다. 숫자(+N분 · 평균 시속)는 서버가 계산하고, Google Gemini(기본 `gemini-3.5-flash-lite`, `GEMINI_MODEL`로 변경)에는 서버가 확인한 사실(가장 느린 도로 · 느린 정도 · 비/눈 · 진행 중인 경로 주변 돌발정보)만 숫자 없이 넘겨 쉬운 한 문장을 받습니다. 근거가 없으면 AI를 부르지 않고 "특이 지연 원인은 확인되지 않았어요.", 실패 · 한도 초과(429) · 3.5초 초과 · 사실에 없는 원인/숫자가 섞인 문장이면 **기본 안내** 문장으로 바로 바꿉니다. 같은 사실은 5분 동안 서버 메모리에서 재사용. ‘근거’를 누르면 서버 계산 · 느린 도로 · 날씨 · 돌발정보를 펼쳐 보여 줍니다. 확인용 `/api/explain/test`.
+- **미리보기(서버·키·네트워크 없이):** `frontend/dist-preview/index.html` — 서울시 API 형식의 샘플 응답을 재생합니다(실시간 아님). 위쪽 "배지 보기"로 실시간 연결 / 잠시 끊김 / 실시간 실패 화면을, "돌발 보기"로 예시 돌발정보(공사+행사 / 행사만 / 없음)를, "날씨 보기"로 예시 날씨(비 / 눈 / 맑음)를, "AI 보기"로 ‘왜 늦나요?’ 모양(AI 문장 / 기본 안내 — 예시 문장이며 실제 AI 응답 아님)을 바꿔 볼 수 있습니다.
 - **기술:** React 18.3 · Vite 5.4 · Tailwind CSS 3.4 / Node.js 20.6+ · Express 4.21 · web-push 3.6 / (선택) Redis
 
 > **인증키는 서버 환경 변수(`backend/.env` 또는 Render Environment)에만 둡니다.** 이 패키지의 어떤 파일에도 키가 없고, 화면은 우리 서버(`/api/...`)만 부릅니다.
@@ -72,6 +73,12 @@ cd frontend && npm install && npm run build && npm run build:preview
 | `KMA_API_KEY` | (없음) | 공공데이터포털 일반 인증키(기상청 단기예보 조회서비스, Encoding · Decoding 모두 가능). 비우면 날씨 꺼짐. 서버 전용 |
 | `WEATHER_CACHE_SEC` | `600` | 날씨를 다시 받는 간격(초, 600~1800). 실패하면 90분 이내 직전 값, 실패 뒤 5분 · 한도 초과 뒤 1시간 쉼 |
 | `KMA_NX` · `KMA_NY` | `60` · `128` | (선택) 기상청 격자. 기본은 국민대(정릉동) |
+| `GEMINI_API_KEY` | (없음) | Google AI Studio API 키. 비우면 AI 없이 '기본 안내' 문장만. 서버 전용(요청 헤더 `x-goog-api-key`로만 보냄) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | 모델 이름. 404(모델 없음)이면 바꿔 보세요(예: `gemini-3.8-flash`) |
+| `GEMINI_TIMEOUT_MS` | `3500` | AI 응답을 기다리는 최대 시간(1000~4000). 넘으면 기본 안내 |
+| `EXPLAIN_CACHE_SEC` | `300` | 같은 사실이면 다시 묻지 않는 시간(초, 180~900) |
+| `GEMINI_MAX_PER_DAY` | `200` | 하루(한국 시각) 최대 호출 수. 넘으면 그날은 기본 안내. 한도 초과(429) 뒤 30분 · 키/모델 오류 뒤 10분 · 그 밖의 실패 뒤 1분 쉼 |
+| `EXPLAIN_WAIT_MS` | `1200` | 화면 응답이 AI를 기다리는 시간. 늦게 온 문장은 캐시에 담겨 몇 초 뒤 갱신 때 나옴 |
 | `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | (없음) | 서버 푸시 |
 | `DATA_FILE` | `./data/db.json` | 사용자 데이터(JSON 파일) |
 
@@ -170,25 +177,26 @@ python tools/fetch_courses.py --raw raw.json                   # 받은 원본�
 |---|---|---|
 | GET | `/api/stops?q=` | 정류장 이름 검색(2글자 이상). 키 없음 · 한도 503 |
 | GET | `/api/stops/near?lat=&lon=` | 내 주변 정류장(반경 400 m, 가까운 순) |
-| GET | `/api/stops/:arsId/trips` | 국민대행 노선별 `etasSec` · `termMin` · `inVehicleMin` · `gate` · `congestion` · `cause` · `path` + `source` · `reason` · `stale` · `ageSec` + 경로 주변 돌발정보 `incidents`(`source` seoul/mock/off/error · `items`) + 날씨 `weather`(`source` kma/mock/off/error · `ptyText` · `rn1Mm` · `t1h` · `wet`) |
+| GET | `/api/stops/:arsId/trips` | 국민대행 노선별 `etasSec` · `termMin` · `inVehicleMin` · `gate` · `congestion` · `cause` · `path` + `source` · `reason` · `stale` · `ageSec` + 경로 주변 돌발정보 `incidents`(`source` seoul/mock/off/error · `items`) + 날씨 `weather`(`source` kma/mock/off/error · `ptyText` · `rn1Mm` · `t1h` · `wet`) + 노선마다 지연 분 `delayMin`(서버 계산) · 보통/혼잡 노선의 `explain`(`source` gemini/rule/example · `text` · `reason` · `facts`) |
 | GET | `/api/weather` | (확인용) 국민대 격자 지금 날씨 + 받은 항목 원문 `raw` · `formatVerified` |
+| GET | `/api/explain/test` | (확인용) 예시 사실(실시간 아님)로 Gemini에 한 번 물어본 결과 `result`(`source` gemini/rule · `text` · `reason`). 5분 캐시, 키는 나오지 않음 |
 | GET · PATCH | `/api/me` | 시간표 · 탑승 정류장 · 설정(`X-User-Id` 헤더, 데모 수준 식별). 정류장 번호는 5자리 |
 | PUT | `/api/me/timetable` · POST `/api/me/timetable/import-text` | 시간표 저장 · 텍스트 해석 |
 | GET | `/api/plan` | 서버 쪽 추천(화면과 같은 계산) + 지금 보낼 알림 |
 | GET | `/api/courses?q=&limit=` · `/api/courses/meta` | 수업 검색(과목명 · 교수명 · 과목번호, 최대 50개) · 강의 목록 정보(학기 · 개수 · 받은 날). 목록이 없으면 503 안내 |
-| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) · 날씨(`weather`: 키 여부 · 격자 · 마지막 관측 · 오류) |
+| GET | `/api/health` | 실시간 공급자(seoul/mock) · 이유 · 캐시 · 호출 수 · 서버 푸시 · 스케줄러 상태 · 돌발정보(`incidents`: 키 여부 · 마지막 성공 · 오류) · 날씨(`weather`: 키 여부 · 격자 · 마지막 관측 · 오류) · AI 설명(`explain`: 키 여부 · 모델 · 오늘 호출 수 · 마지막 문장 · 오류 · 쉬는 시각) |
 | GET/POST | `/api/push/key` · `/api/push/subscribe` | Web Push(VAPID) |
 | GET | `/api/live?routes=` · `/api/routes/:no/stations` · PATCH `/api/me/settings` | v0.3 노선별 API(호환용, 화면은 쓰지 않음) |
 
 ## 7. 테스트
 
 ```bash
-cd shared && node --test                       # 36개: 응답 해석 · 국민대행 노선 · 차내 시간 · 원인 · 추천 · 알림 · 예시 노선 · 수업 검색 · 강의실 → 건물 · 겹치는 과목 빼기
-cd backend && npm test                         # 43개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러 · /api/courses
+cd shared && node --test                       # 59개: 응답 해석 · 국민대행 노선 · 차내 시간 · 원인 · 추천 · 알림 · 예시 노선 · 수업 검색 · 돌발정보 · 날씨 · 왜 늦나요?(사실 · 지연 분 · 기본 안내 · AI 문장 검사)
+cd backend && npm test                         # 73개: 서울시 응답 · 캐시 · 직전 값 · 예시 데이터 · API · 서버=화면 계산 일치 · 스케줄러 · /api/courses · 돌발정보 · 기상청 · Gemini(가짜 서버)
 python3 -m unittest tools/test_fetch_courses.py # 7개: 30분 칸 합치기 · 강의 변환 · 쪽 나누기 · 거절 조건 · 대학/학과 찾기 · 전체/과목명 모드
-python3 test/regression_preview.py             # 28개: 미리보기(모든 http 차단) 배지 3상태 · 휴대폰/PC · 넘침 · 오류
+python3 test/regression_preview.py             # 54개: 미리보기(모든 http 차단) 배지 3상태 · 왜 늦나요?(AI/기본 안내/예시) · 휴대폰/PC · 넘침 · 오류
 python3 test/preview_courses.py                # 38개: 수업 검색 → 미리보기 · 바꿔서 추가(확인 · 취소 · 되돌리기) · 야간/토요일 · 빼기 · 휴대폰/PC
-node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 21개: 실서비스 빌드 + 가짜 서울시 서버 / 키 없는 서버 · 수업 검색 → 서버 저장
+node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 41개: 실서비스 빌드 + 가짜 서울시 · 돌발정보 · 기상청 · Gemini 서버 / 키 없는 서버 · 수업 검색 → 서버 저장
 ```
 
 **확인한 것(이 작업 환경, 헤드리스 Chromium):** 정류장 검색 → 선택 → 홈 3요소, 화면 출발 시각 = 서버 `/api/plan`, 정체 원인 표시, 서버에 정류장 저장, 서버 푸시 synced, iPhone 13에서 3요소가 스크롤 없이 보임, 키 없는 서버의 예시 데이터 배지 · 점선 카드 · 정류장 검색 안내 · VAPID 안내, 페이지 오류 0.
@@ -202,6 +210,7 @@ node backend/scripts/e2eServer.js &  python3 test/e2e_live.py   # 21개: 실서�
 - 로그인 · 사용자 보호(지금은 기기별 임의 ID), 서버 여러 대일 때 스케줄러 중복 발송 방지.
 - `fetch_courses.py`는 이 작업 환경에서 학교 서버에 직접 접속하지 못해, 연결된 브라우저로 확인한 응답 구조를 그대로 흉내 낸 데이터로만 시험했습니다. 처음 실행 결과(강의 수 · 시간표 시간이 있는 강의 수)를 꼭 확인하세요.
 - 직접 추가 창은 겹치는 수업이 있어도 안내만 하고 넣습니다(수업 검색만 '바꿔서 추가').
+- '왜 늦나요?'는 실제 Google Gemini 서버로는 이 작업 환경에서 시험하지 못했습니다(요청 · 응답 모양은 Gemini API 문서 기준, 테스트는 가짜 서버). 배포 뒤 `/api/explain/test`로 확인하세요. 무료 등급의 하루 한도는 Google AI Studio에서 확인하고 `GEMINI_MAX_PER_DAY`를 맞추세요. AI 문장은 원인을 확정하지 않습니다.
 
 ## 9. 출처 · 라이선스
 

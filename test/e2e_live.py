@@ -1,6 +1,6 @@
 """실서비스 빌드(frontend/dist) + 백엔드 e2e. 서울시 API 자리에 테스트 고정 응답을 넣은 서버(8801)와 키 없는 서버(8802)를 씁니다.
 실행: cd frontend && npm run build  →  node backend/scripts/e2eServer.js &  →  python test/e2e_live.py"""
-import datetime, re, sys, time
+import datetime, json, re, sys, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -61,21 +61,32 @@ with sync_playwright() as p:
     line = flat(pg.locator('[data-testid="data-line"]').inner_text())
     check('출처 배지: 서울시 실시간 + 갱신 시각', line.startswith('서울시 실시간') and '갱신' in line, line)
     check('예시 데이터 안내 없음', pg.locator('[data-testid="fallback-notice"]').count() == 0)
-    # 경로 주변 서울시 돌발정보(가짜 AccInfo 응답): 버스 카드 바로 아래 노란 줄 → 펼치면 2건
-    strip = pg.locator('[data-testid="incident-strip"]'); strip.wait_for(timeout=8000)
+    # '왜 늦나요?' 한 줄(가짜 Gemini 응답): 171번이 혼잡 → 버스 카드 바로 아래 노란 줄 · AI 태그 · +11분(서버 계산) · 근거
+    #  (지난번 '경로 주변 날씨 · 돌발정보' 줄 자리 — 근거를 펼치면 날씨 · 돌발정보가 함께 나옴)
+    why = pg.locator('[data-testid="why-strip"]'); why.wait_for(timeout=8000)
     order = pg.evaluate('''() => [...document.querySelectorAll('section[aria-label]')].map(s => s.getAttribute('aria-label'))''')
-    st = flat(strip.inner_text())
-    check('경로 주변 줄: 버스 카드 다음 노란 줄 · 정체 원인일 수 있어요 · 비 · 공사(기상청 08:00 관측)', strip.get_attribute('data-tone') == 'caution' and strip.get_attribute('data-source') == 'seoul'
-          and order.index('경로 주변 날씨 · 돌발정보') == order.index('실시간 버스 도착') + 1 and '정체 원인일 수 있어요 · 비 · 공사' in st and '1시간 1.5mm(08:00 관측)' in st and '예시' not in st, st)
-    strip.get_by_role('button').click()
-    st = flat(strip.inner_text())
-    check('펼침: 날씨(비 · 1시간 1.5mm · 기온) + 경로 위 공사 + 국민대 근처 행사(예정), 차량고장·먼 곳·끝난 것 제외', pg.locator('[data-testid="weather-item"]').count() == 1
-          and pg.locator('[data-testid="incident-item"]').count() == 2 and '비 · 1시간 1.5mm' in st and '기온 7.2℃' in st
-          and '정릉로 하수관 정비공사(테스트)' in st and '1711 · 171 · 1112 경로 위' in st and '거리 행사(테스트)' in st and '예정' in st
-          and '봉은교' not in st and '차량 고장' not in st and '기상청 초단기실황 08:00 관측' in st and '서울시 돌발정보 08:1' in st, st)
+    wt = flat(why.inner_text())
+    check('왜 늦나요?: 버스 카드 다음 노란 줄 · AI 문장 · +11분 · 근거(경로 주변 줄 자리, 줄이 늘지 않음)', why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai'
+          and order.index('왜 늦나요?') == order.index('실시간 버스 도착') + 1 and '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' in wt and '+11분' in wt and '근거' in wt
+          and '예시' not in wt and pg.locator('[data-testid="incident-strip"]').count() == 0, wt)
+    why.get_by_role('button').first.click()
+    wt = flat(why.inner_text())
+    check('근거 펼침: 서버 계산(약 11분 더 · 평균 시속 6km) · 정릉로 · 비 1.5mm(08:00 관측) · 경로 위 공사 + 국민대 근처 행사(예정) · AI는 사실만',
+          '원활할 때보다 약 11분 더 걸려요 · 평균 시속 6km' in wt and '171번 정릉시장 → 국민대학교앞 · 원활 기준 시속 20km' in wt
+          and '정릉로 · 걷는 속도 수준으로 느림' in wt and '날씨 · 기상청 08:00 관측' in wt and '비 · 1시간 1.5mm' in wt
+          and '공사 정릉로 하수관 정비공사(테스트) · 경로 위' in wt and '거리 행사(테스트) · 국민대 근처' in wt and '부터 예정' in wt
+          and '봉은교' not in wt and '차량 고장' not in wt and '돌발정보 · 서울시 08:1' in wt
+          and 'AI(Gemini)는 위 사실만 보고 문장을 썼어요' in wt and '정체의 원인이라고 확정하는 건 아니에요' in wt and '예시' not in wt, wt)
+    pg.screenshot(path=str(OUT / 'live_desktop_why_open.png'))
     trips = api(ctx, 8801, uid, 'GET', '/api/stops/08901/trips')
     check('API: /api/stops/08901/trips에 incidents(seoul, 2건)', trips['incidents']['source'] == 'seoul' and [x['id'] for x in trips['incidents']['items']] == ['T-WORK', 'T-EVENT'], str(trips['incidents'])[:200])
-    strip.get_by_role('button').click()
+    t171 = next(t for t in trips['trips'] if t['no'] == '171')
+    facts = json.dumps(t171['explain']['facts'], ensure_ascii=False)
+    check('API: 171 → delayMin 11(서버 계산) · explain gemini · AI에 넘긴 사실에는 숫자 없음 · 예정된 행사는 사실에서 뺌', t171.get('delayMin') == 11 and t171['explain']['source'] == 'gemini'
+          and t171['explain']['facts']['가장 느린 도로'] == '정릉로' and not re.search(r'[0-9]', facts) and '거리 행사' not in facts, facts)
+    why.get_by_role('button').first.click()
+    ex = api(ctx, 8801, uid, 'GET', '/api/explain/test')
+    check('API: /api/explain/test = 예시 사실(실시간 아님) · Gemini 문장', ex.get('example') is True and ex['result']['source'] == 'gemini' and '실시간 아님' in ex.get('note', ''), str(ex)[:200])
     # 기상청 초단기실황(가짜 응답): 서버에서만 부르고, 국민대 격자 60 · 128
     wx = api(ctx, 8801, uid, 'GET', '/api/weather')
     check('API: /api/weather = 기상청 · 격자 60,128 · 비 1.5mm · 원문(raw)', wx.get('source') == 'kma' and wx.get('grid') == {'nx': 60, 'ny': 128}
@@ -83,6 +94,8 @@ with sync_playwright() as p:
     check('API: trips 응답에 weather(kma) · 원문 없음', trips.get('weather', {}).get('source') == 'kma' and 'raw' not in trips['weather'], str(trips.get('weather'))[:160])
     h = api(ctx, 8801, uid, 'GET', '/api/health')
     check('API: /api/health 날씨 상태(키 있음 · 마지막 관측)', h['weather']['keyConfigured'] and h['weather']['lastObs'] is not None and 'E2E-KMA-KEY' not in str(h), str(h['weather'])[:160])
+    check('API: /api/health AI 설명 상태(키 있음 · gemini-3.5-flash-lite · 마지막 성공 · 키 노출 없음)', h['explain']['keyConfigured'] and h['explain']['model'] == 'gemini-3.5-flash-lite'
+          and h['explain']['lastOkAt'] and h['explain']['lastError'] is None and 'E2E-GEMINI-KEY' not in str(h), str(h['explain'])[:200])
     me = api(ctx, 8801, uid, 'GET', '/api/me')
     check('서버에 탑승 정류장 저장', (me.get('stop') or {}).get('arsId') == '08901', str(me.get('stop')))
     pg.screenshot(path=str(OUT / 'live_desktop_home.png'))
@@ -96,6 +109,8 @@ with sync_playwright() as p:
     check('설정: 돌발정보 연결됨 · 2건', inc == '연결됨 · 2건', inc)
     wxs = flat(pg.locator('[data-testid="weather-status"]').inner_text())
     check('설정: 날씨(기상청) 연결됨 · 08:00 관측', wxs == '연결됨 · 08:00 관측' and pg.get_by_text('국민대 격자(60 · 128)').count() == 1, wxs)
+    ais = flat(pg.locator('[data-testid="explain-status"]').inner_text())
+    check('설정: AI 설명(Gemini) 연결됨 · gemini-3.5-flash-lite', ais == '연결됨 · gemini-3.5-flash-lite' and pg.get_by_text('AI 설명(Gemini)').count() == 1, ais)
     pg.get_by_role('button', name='서버 푸시 켜기').click()
     pg.wait_for_selector('text=서버 푸시 켜짐(synced)', timeout=10000)
     check('서버 푸시 켜기 → synced + 서버에 구독 1개', api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1)
@@ -125,7 +140,10 @@ with sync_playwright() as p:
     pg.wait_for_selector('[data-testid="data-line"] [data-source="seoul"]', timeout=10000)
     ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
     third = pg.locator('section[aria-label="강의실 도착 예정"]').bounding_box(); tab = pg.locator('nav.fixed').bounding_box()
-    check('[iPhone 13] 가로 넘침 없음 · 3요소가 스크롤 없이 보임', ov <= 0 and third['y'] + third['height'] <= tab['y'], f"ov={ov} bottom={third['y'] + third['height']:.0f} tab={tab['y']:.0f}")
+    pg.wait_for_selector('[data-testid="why-strip"]', timeout=8000)
+    check('[iPhone 13] 가로 넘침 없음 · \'왜 늦나요?\' 줄이 있어도 3요소가 스크롤 없이 보임', ov <= 0 and third['y'] + third['height'] <= tab['y'], f"ov={ov} bottom={third['y'] + third['height']:.0f} tab={tab['y']:.0f}")
+    why = pg.locator('[data-testid="why-strip"]')
+    check('[iPhone 13] 왜 늦나요? 두 줄 안(줄임) · +11분', why.bounding_box()['height'] <= 64 and '+11분' in why.inner_text(), f"h={why.bounding_box()['height']:.1f}")
     pg.screenshot(path=str(OUT / 'live_iphone13_home.png'))
     ctx.close()
 
@@ -151,6 +169,7 @@ with sync_playwright() as p:
     order = pg.evaluate('''() => [...document.querySelectorAll('section[aria-label]')].map(s => s.getAttribute('aria-label'))''')
     check('키 없음: 예시(비 + 돌발 1건) · 점선 · 세 카드 다음 · 예시 데이터 · 실시간 아님', strip.count() == 1 and strip.get_attribute('data-tone') == 'mock'
           and order.index('경로 주변 날씨 · 돌발정보') > order.index('강의실 도착 예정') and '예시 데이터 · 실시간 아님' in strip.inner_text() and '비 오는 중' in strip.inner_text(), str(order))
+    check('키 없음: 추천 버스가 원활(1112)이면 \'왜 늦나요?\' 없이 지난번 경로 주변 줄', pg.locator('[data-testid="why-strip"]').count() == 0)
     pg.screenshot(path=str(OUT / 'nokey_desktop_home.png'))
     pg.get_by_role('link', name='설정').first.click()
     pg.get_by_role('button', name='서버 푸시 켜기').wait_for(timeout=5000)
@@ -159,9 +178,14 @@ with sync_playwright() as p:
     check('키 없음: 설정 돌발정보 = 예시 데이터 + 키 없음 안내', inc == '예시 데이터' and pg.get_by_text('SEOUL_ACCIDENT_API_KEY도 없어요').count() == 1, inc)
     wxs = flat(pg.locator('[data-testid="weather-status"]').inner_text())
     check('키 없음: 설정 날씨 = 예시 데이터 + KMA_API_KEY 없음 안내', wxs == '예시 데이터' and pg.get_by_text('KMA_API_KEY도 없어요').count() == 1, wxs)
+    ais = flat(pg.locator('[data-testid="explain-status"]').inner_text())
+    check('키 없음: 설정 AI 설명 = 예시 데이터 + GEMINI_API_KEY 없음 안내', ais == '예시 데이터' and pg.get_by_text('GEMINI_API_KEY도 없어요').count() == 1, ais)
     wx = api(ctx, 8802, uid2, 'GET', '/api/weather')
     tr = api(ctx, 8802, uid2, 'GET', '/api/stops/08901/trips')
     check('키 없음: /api/weather 꺼짐(off) · trips 날씨는 예시(mock)', wx.get('source') == 'off' and tr.get('weather', {}).get('source') == 'mock', f"{wx} / {str(tr.get('weather'))[:80]}")
+    ex2 = [t.get('explain') for t in tr['trips'] if t.get('explain')]
+    check('키 없음: 막히는 예시 노선의 설명은 예시(AI를 부르지 않음) · /api/explain/test는 키 없음', ex2 and all(e['source'] == 'example' for e in ex2)
+          and api(ctx, 8802, uid2, 'GET', '/api/explain/test')['result']['reason'] == 'no-key', str(ex2)[:160])
     pg.get_by_role('link', name='시간표').first.click()
     pg.locator('section[aria-label="수업 검색"] input[type="search"]').fill('회로')
     pg.wait_for_selector('text=fetch_courses.py', timeout=5000)

@@ -58,6 +58,30 @@ function weatherStatus(mode, wx, h) {
   return ['muted', '대기', '탑승 정류장을 고르면 국민대 날씨를 확인해요.'];
 }
 
+/** 설정 · AI 설명(Gemini) 줄: 서버 상태(health.explain)로. 키 · 모델은 서버 환경변수(GEMINI_API_KEY · GEMINI_MODEL) */
+const kstHHMM = (iso) => { const d = new Date(Date.parse(iso) + 9 * 3600_000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+function explainStatus(mode, live, h) {
+  if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 예시 문장을 보여 줘요(실제 AI 응답 아님). 버스가 막힐 때만 홈에 나와요.'];
+  if (live?.source === 'mock') {
+    return ['muted', '예시 데이터', `버스 정보가 예시 데이터라 AI를 부르지 않고 기본 안내로 보여 줘요(실시간 아님).${h && !h.keyConfigured ? ' 서버에 GEMINI_API_KEY도 없어요.' : ''}`];
+  }
+  if (!h) return ['muted', '대기', '버스가 막힐 때 홈에 \'왜 늦나요?\' 한 줄을 보여 줘요.'];
+  if (!h.keyConfigured) return ['muted', '꺼짐', '서버에 GEMINI_API_KEY가 없어 AI 없이 기본 안내만 보여 줘요.'];
+  const model = h.model || 'Gemini', err = h.lastError;
+  if (h.cooldownUntil && err) {
+    if (err.kind === 'quota') return ['warn', '기본 안내 중', `Gemini 호출 한도를 넘어 ${kstHHMM(h.cooldownUntil)}까지 기본 안내로 보여 줘요.`];
+    if (err.kind === 'auth' || err.kind === 'bad-request') return ['danger', '오류', `Gemini 키를 확인해 주세요(${err.message}). 그동안 기본 안내로 보여 줘요.`];
+    if (err.kind === 'model') return ['danger', '오류', `모델 ${model}을(를) 쓸 수 없어요. Render 환경변수 GEMINI_MODEL을 확인해 주세요. 그동안 기본 안내로 보여 줘요.`];
+    return ['warn', '기본 안내 중', `${err.message} — ${kstHHMM(h.cooldownUntil)}까지 기본 안내로 보여 줘요.`];
+  }
+  if (h.maxPerDay && h.callsToday >= h.maxPerDay) return ['warn', '기본 안내 중', `오늘 호출 상한(${h.maxPerDay}회)에 닿아 자정까지 기본 안내로 보여 줘요.`];
+  const min = Math.round((h.cacheSec || 300) / 60);
+  const aiSeen = (live?.trips || []).some((t) => t.explain?.source === 'gemini'); // 상태(1분마다)보다 홈 응답(20초마다)이 먼저 알 때
+  return h.lastOkAt || aiSeen
+    ? ['ok', `연결됨 · ${model}`, `막힐 때만, 같은 상황이면 ${min}분 동안 다시 묻지 않아요. 실패하면 기본 안내로 바로 바꿔요. 오늘 ${h.callsToday}번 물어봤어요.`]
+    : ['ok', `준비됨 · ${model}`, '아직 AI에 물어본 적이 없어요. 버스가 막히면 물어봐요(주소 끝에 /api/explain/test를 열면 바로 시험).'];
+}
+
 /** 분 단위 선택 칩 */
 function MinuteChips({ label, value, options, onChange }) {
   return (
@@ -98,6 +122,7 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
   const label = { off: '서버 푸시 켜기', working: '켜는 중…', on: '다시 등록', error: '다시 시도' }[push.state] || '서버 푸시 켜기';
   const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents);
   const [wxLevel, wxText, wxDesc] = weatherStatus(mode, live?.weather, health?.weather);
+  const [aiLevel, aiText, aiDesc] = explainStatus(mode, live, health?.explain);
   return (
     <Group title="데이터 · 서버 연결">
       <Item label="실시간 데이터" desc={srcDesc}>
@@ -108,6 +133,9 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
       </Item>
       <Item label="날씨(기상청)" desc={wxDesc}>
         <span data-testid="weather-status"><Chip level={wxLevel}>{wxText}</Chip></span>
+      </Item>
+      <Item label="AI 설명(Gemini)" desc={aiDesc}>
+        <span data-testid="explain-status"><Chip level={aiLevel}>{aiText}</Chip></span>
       </Item>
       <Item label="서버 동기화" desc="시간표·정류장·설정을 서버에 저장해요. 서버가 이 값으로 알림을 계산해요.">
         <Chip level={syncLevel}>{syncText}</Chip>

@@ -6,6 +6,7 @@ import { routeColor } from '../lib/palette.js';
 import { Button, IconAlert, IconBus, IconChevron, IconPin, IconStop, SourceTag } from './ui.jsx';
 import { StopSearch } from './StopPicker.jsx';
 import IncidentStrip from './IncidentStrip.jsx';
+import WhyStrip from './WhyStrip.jsx';
 
 const TONE = {
   ok: 'bg-go-soft text-go', warn: 'bg-caution-soft text-caution', danger: 'bg-stop-soft text-stop', muted: 'bg-surface text-ink-muted',
@@ -137,6 +138,11 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
     const leftText = left >= 60 ? `${Math.floor(left / 60)}시간 ${left % 60}분 뒤` : `${left}분 뒤`;
     const n = rec.nextBus.inMin;
     const arrival = n == null ? '도착 정보 없음' : n < 1 ? '곧 도착' : `${Math.round(n)}분 후 도착`;
+    // 버스가 보통 · 혼잡이고 서버가 설명(explain)을 보냈으면 '왜 늦나요?' 한 줄(근거를 펼치면 날씨 · 돌발정보 포함),
+    // 아니면 지난번 '경로 주변 날씨 · 돌발정보' 줄. 실시간이면 버스 카드 바로 아래, 예시 데이터면 세 카드 다음(첫 화면 3요소를 밀어내지 않게)
+    const strip = t.explain && ['normal', 'heavy'].includes(rec.nextBus.congestion)
+      ? <WhyStrip trip={t} why={t.explain} delayMin={t.delayMin} data={live?.incidents} weather={live?.weather} />
+      : <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />;
     body = (
       <>
         <section aria-label="출발 추천" data-source={mock ? 'mock' : 'seoul'} className={`min-w-0 rounded-3xl px-5 pb-5 pt-4 shadow-card sm:px-6 sm:pb-6 sm:pt-5 short:pb-4 short:pt-3 ${card}`}>
@@ -161,15 +167,14 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
           <span className="num">{t.no}</span>번 버스 {arrival}
         </InfoCard>
 
-        {/* 경로 주변 날씨(비 · 눈일 때만) · 돌발정보: 실시간이면 버스 카드 바로 아래, 예시 데이터면 세 카드 다음(첫 화면 3요소를 밀어내지 않게) */}
-        {!mock && <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />}
+        {!mock && strip}
 
         <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />} caption="강의실 도착"
           tag={<Signal tone={st.tone}>{st.label}</Signal>}
           sub={`${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`}>
           <span className="num">{toHHMM(p.classArriveMin)}</span> 강의실 도착 예정
         </InfoCard>
-        {mock && <IncidentStrip data={live?.incidents} weather={live?.weather} congestion={rec.nextBus.congestion} />}
+        {mock && strip}
       </>
     );
   }

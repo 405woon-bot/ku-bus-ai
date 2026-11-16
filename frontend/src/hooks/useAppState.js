@@ -15,7 +15,7 @@ export const initialState = () => ({
   stop: MODE === 'sample' ? { arsId: 'S-01', name: '고려대사범대학부속고등학교' } : null,
   prefs: { walkToStopMin: DEFAULTS.walkToStopMin, marginMin: DEFAULTS.marginMin, notify: true, notifyBeforeMin: DEFAULTS.notifyBeforeMin },
   walkOverrides: {},
-  preview: { speed: 1, epoch: 1, source: 'live', incidents: 'all', weather: 'rain' },   // 미리보기 시계·배지·예시 돌발정보·예시 날씨(샘플 모드 전용)
+  preview: { speed: 1, epoch: 1, source: 'live', incidents: 'all', weather: 'rain', explain: 'ai' },   // 미리보기 시계·배지·예시 돌발정보·예시 날씨·'왜 늦나요?' 모양(샘플 모드 전용)
   fired: {},                         // `${날짜}:${수업id}` → 보낸 알림
   log: [],
 });
