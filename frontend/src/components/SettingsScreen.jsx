@@ -21,6 +21,24 @@ const Item = ({ label, desc, children }) => (
   </div>
 );
 
+/** 설정 · 돌발정보 줄: 서버 상태(health.incidents)와 마지막 응답(live.incidents)으로 */
+function incidentStatus(mode, inc, h) {
+  if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 예시 돌발정보를 보여 줘요(실시간 아님).'];
+  if (inc?.source === 'mock') {
+    return ['muted', '예시 데이터', `버스 정보가 예시 데이터라 돌발정보도 예시로 보여 줘요(실시간 아님).${h && !h.keyConfigured ? ' 서버에 SEOUL_ACCIDENT_API_KEY도 없어요.' : ''}`];
+  }
+  if (h && !h.keyConfigured) return ['muted', '꺼짐', '서버에 SEOUL_ACCIDENT_API_KEY가 없어 꺼져 있어요.'];
+  if (inc?.source === 'error') return ['danger', '오류', inc.message || '서울시 돌발정보를 받지 못했어요. 잠시 뒤 다시 시도해요.'];
+  if (inc?.source === 'loading') return ['muted', '불러오는 중', '서울시 돌발정보를 처음 받는 중이에요.'];
+  const min = Math.round((h?.cacheSec || 300) / 60);
+  if (inc?.source === 'seoul') {
+    return inc.stale ? ['warn', `직전 값 · ${inc.items.length}건`, `서울시 연결이 잠시 끊겨 ${Math.max(1, Math.round((inc.ageSec || 0) / 60))}분 전 정보를 보여 줘요.`]
+      : ['ok', `연결됨 · ${inc.items.length}건`, `서울시 돌발정보를 ${min}분마다 받아 경로 주변(300m)과 국민대 근처(1km)만 보여 줘요.`];
+  }
+  if (h?.lastError && !h?.lastOkAt) return ['danger', '오류', h.lastError.message];
+  return ['muted', '대기', '탑승 정류장을 고르면 경로 주변 돌발정보를 확인해요.'];
+}
+
 /** 분 단위 선택 칩 */
 function MinuteChips({ label, value, options, onChange }) {
   return (
@@ -59,10 +77,14 @@ function ServerGroup({ mode, live, health, sync, push, onEnablePush }) {
     : push.state === 'on' ? `서버에 구독 저장됨${push.count ? `(${push.count}개)` : ''} — 창을 닫아도 알림이 와요.`
       : push.state === 'error' ? push.message : '창을 닫아도 출발 알림을 받아요.';
   const label = { off: '서버 푸시 켜기', working: '켜는 중…', on: '다시 등록', error: '다시 시도' }[push.state] || '서버 푸시 켜기';
+  const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents);
   return (
     <Group title="데이터 · 서버 연결">
       <Item label="실시간 데이터" desc={srcDesc}>
         {src ? <SourceTag {...src} /> : <Chip>정류장 미선택</Chip>}
+      </Item>
+      <Item label="돌발정보" desc={incDesc}>
+        <span data-testid="incident-status"><Chip level={incLevel}>{incText}</Chip></span>
       </Item>
       <Item label="서버 동기화" desc="시간표·정류장·설정을 서버에 저장해요. 서버가 이 값으로 알림을 계산해요.">
         <Chip level={syncLevel}>{syncText}</Chip>

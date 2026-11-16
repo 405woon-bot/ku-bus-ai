@@ -128,8 +128,11 @@ export function tripFromStations(stations, { boardArsId, boardSeq, maxMin = 120,
     if (!gate) continue;
     const seg = segmentTrip(stations, bi, j, opt);
     if (seg.inVehicleMin > maxMin) return null;
+    // path: 승차 정류장 → 국민대 정류장까지 지나는 정류장 위치(경로 주변 돌발정보 매칭용, 좌표가 없는 정류장은 뺌)
+    const path = stations.slice(bi, j + 1).filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon) && s.lat !== 0)
+      .map((s) => ({ lat: s.lat, lon: s.lon, name: s.name }));
     return { boardName: stations[bi].name, alightName: stations[j].name, gate, stopsAway: j - bi, distM: Math.round(seg.distM),
-      inVehicleMin: seg.inVehicleMin, intermediateStops: seg.intermediateStops, kmh: seg.kmh, congestion: congestionLevel(seg.kmh), slowest: seg.slowest };
+      inVehicleMin: seg.inVehicleMin, intermediateStops: seg.intermediateStops, kmh: seg.kmh, congestion: congestionLevel(seg.kmh), slowest: seg.slowest, path };
   }
   return null;
 }

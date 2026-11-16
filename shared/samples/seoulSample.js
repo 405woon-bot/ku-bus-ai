@@ -37,7 +37,16 @@ export const SAMPLE_ARRIVALS = {
   ]),
 };
 
-const st = (seq, stationNm, arsId, fullSectDist, sectSpd) => ({ seq: String(seq), stationNm, arsId, station: `ST${arsId}`, fullSectDist: String(fullSectDist), sectSpd: String(sectSpd) });
+// 정류장 위치(gpsX 경도 · gpsY 위도) — 경로 주변 돌발정보 미리보기용. 고려대부고 · 청덕초 · 정릉3동은 위 검색 샘플과 같은 위치,
+// 국민대 정류장 셋은 국민대 주변의 대략 위치(샘플)입니다. 나머지 샘플 정류장은 위치가 없어 경로 선에서 빠집니다.
+const POS = {
+  'S-01': ['127.0022', '37.60785'], 'S-02': ['127.0002507', '37.6084955'], 'S-03': ['127.0046029', '37.6085761'],
+  'K-01': ['126.9970', '37.6106'], 'K-02': ['126.9962', '37.6112'], 'K-03': ['126.9985', '37.6125'],
+};
+const st = (seq, stationNm, arsId, fullSectDist, sectSpd) => ({
+  seq: String(seq), stationNm, arsId, station: `ST${arsId}`, fullSectDist: String(fullSectDist), sectSpd: String(sectSpd),
+  ...(POS[arsId] ? { gpsX: POS[arsId][0], gpsY: POS[arsId][1] } : {}),
+});
 // 구간 거리는 OSM 지도에서 잰 값(고려대부고→청덕초 약 186 m, 청덕초→국민대학교앞 약 556 m, 청덕초→국민대후문 약 366 m)
 // 구간 속도는 정릉로 출근길 정체를 가정한 샘플(청덕초→국민대학교앞 9 km/h)
 export const SAMPLE_ROUTE_STATIONS = {

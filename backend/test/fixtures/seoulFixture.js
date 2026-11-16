@@ -53,10 +53,16 @@ export function json(items, { code = '0', msg = '정상적으로 처리되었습
   return JSON.stringify({ comMsgHeader: {}, msgHeader: { headerCd: code, headerMsg: msg, itemCount: 0 }, msgBody: { itemList: items.length === 1 ? items[0] : items } });
 }
 
+// 정류장 위치(경도, 위도) — 경로 주변 돌발정보 테스트용. 국민대 주변 실제 정류장의 대략 위치(가상 노선이라 순서는 관계없음)
+export const COORDS = {
+  '08900': ['127.0150', '37.6040'], '08901': ['127.0101', '37.6060'], '08902': ['127.0046', '37.6086'], '08903': ['127.0022', '37.60785'],
+  '08904': ['127.00025', '37.6085'], '08905': ['126.9970', '37.6106'], '08906': ['126.9962', '37.6112'], '08907': ['126.9900', '37.6150'],
+  '08909': ['126.9971', '37.6104'], '08910': ['127.0003', '37.6083'], '08911': ['127.0104', '37.6062'], '08912': ['126.9985', '37.6125'],
+};
 export const stationItems = (id, speeds = {}) => (STATIONS[id] || []).map(([seq, name, arsId, dist, spd, turn]) => ({
   busRouteId: id, busRouteNm: Object.keys(ROUTES).find((k) => ROUTES[k].busRouteId === String(id)) || '', seq: String(seq), section: seq === 1 ? '0' : `${id}${seq}`,
   station: `1${arsId}0000`.slice(0, 9), stationNm: name, arsId, stationNo: arsId, fullSectDist: String(dist), sectSpd: String(speeds[seq] ?? spd),
-  direction: '테스트', transYn: turn === 'Y' ? 'Y' : 'N', gpsX: '127.0', gpsY: '37.6', routeType: '3',
+  direction: '테스트', transYn: turn === 'Y' ? 'Y' : 'N', gpsX: COORDS[arsId]?.[0] ?? '127.0', gpsY: COORDS[arsId]?.[1] ?? '37.6', routeType: '3',
 }));
 
 /**

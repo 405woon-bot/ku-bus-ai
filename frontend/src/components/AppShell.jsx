@@ -1,6 +1,6 @@
 import { DAYS, toHHMM } from '@shared/time.js';
 import { IconBus, IconCalendar, IconHome, IconReplay, IconSettings } from './ui.jsx';
-import { PREVIEW_SOURCES } from '../hooks/useTrips.js';
+import { PREVIEW_INCIDENTS, PREVIEW_SOURCES } from '../hooks/useTrips.js';
 
 export const TABS = [
   { id: 'home', label: '홈', Icon: IconHome },
@@ -74,6 +74,14 @@ export function PreviewBar({ preview, dispatch }) {
           {Object.entries(PREVIEW_SOURCES).map(([id, v]) => (
             <button key={id} type="button" aria-pressed={(preview.source || 'live') === id} onClick={() => dispatch({ type: 'setPreview', patch: { source: id } })}
               className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.source || 'live') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{v.label}</button>
+          ))}
+        </span>
+        {/* 홈 화면 '경로 주변 돌발정보' 줄을 예시 상황별로 미리 보는 단추 */}
+        <span className="flex w-full items-center gap-1 md:w-auto" role="group" aria-label="미리보기 돌발정보">
+          <span className="mr-0.5 whitespace-nowrap font-semibold text-ink">돌발 보기</span>
+          {Object.entries(PREVIEW_INCIDENTS).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={(preview.incidents || 'all') === id} onClick={() => dispatch({ type: 'setPreview', patch: { incidents: id } })}
+              className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.incidents || 'all') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
           ))}
         </span>
       </div>

@@ -62,7 +62,7 @@ export default function App() {
   const sync = useServerSync(state, dispatch, MODE === 'api');
   const [tab, go] = useTab();
   const now = useNow(MODE, state.preview);
-  const live = useTrips({ mode: MODE, stop: state.stop, now, previewSource: state.preview.source });
+  const live = useTrips({ mode: MODE, stop: state.stop, now, previewSource: state.preview.source, previewIncidents: state.preview.incidents || 'all' });
   const mockData = live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터로 계산 중
   const health = useHealth(MODE === 'api');
 

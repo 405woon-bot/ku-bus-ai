@@ -5,6 +5,8 @@ import { SAMPLE_ARRIVALS, SAMPLE_ROUTE_STATIONS, SAMPLE_STOP_SEARCH, SAMPLE_TIME
 import { toMin } from '@shared/time.js';
 import { searchCourses } from '@shared/courses.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '@shared/samples/sampleCourses.js';
+import { kstMidnight, matchIncidents, normalizeAcc } from '@shared/incidents.js';
+import { sampleIncidentRows } from '@shared/samples/incidentSample.js';
 
 export { SAMPLE_COURSE_META };
 /** 미리보기 수업 검색: 샘플 강의에서 찾음(실제 강의 목록 아님) */
@@ -33,4 +35,16 @@ export function sampleTrips(arsId, elapsedSec) {
     return { ...a, etasSec: shifted.slice(0, 2) };
   });
   return computeTrips({ arrivals, stationsByRoute: STATIONS, boardArsId: arsId });
+}
+
+/**
+ * 미리보기 예시 돌발정보: 서울 열린데이터광장 AccInfo 형식의 예시 행 → 실제 서비스와 같은 해석 · 경로 매칭(shared/incidents.js).
+ * 미리보기 시계(오늘 날짜 + 샘플 시각) 기준. busSource가 'mock'(실시간 실패 배지)이면 서버처럼 1건만, 점선으로.
+ * @param {'all'|'campus'|'none'} scenario
+ */
+export function sampleIncidents(trips, minutes, scenario = 'all', busSource = 'seoul') {
+  const nowMs = kstMidnight(Date.now()) + Math.round(minutes * 60_000);
+  const items = matchIncidents(sampleIncidentRows(nowMs, scenario).map(normalizeAcc).filter(Boolean), { trips, nowMs });
+  const mock = busSource === 'mock';
+  return { source: mock ? 'mock' : 'sample', reason: 'example', items: mock ? items.slice(0, 1) : items, nowMs };
 }

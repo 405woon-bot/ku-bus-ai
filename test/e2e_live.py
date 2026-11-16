@@ -61,6 +61,20 @@ with sync_playwright() as p:
     line = flat(pg.locator('[data-testid="data-line"]').inner_text())
     check('출처 배지: 서울시 실시간 + 갱신 시각', line.startswith('서울시 실시간') and '갱신' in line, line)
     check('예시 데이터 안내 없음', pg.locator('[data-testid="fallback-notice"]').count() == 0)
+    # 경로 주변 서울시 돌발정보(가짜 AccInfo 응답): 버스 카드 바로 아래 노란 줄 → 펼치면 2건
+    strip = pg.locator('[data-testid="incident-strip"]'); strip.wait_for(timeout=8000)
+    order = pg.evaluate('''() => [...document.querySelectorAll('section[aria-label]')].map(s => s.getAttribute('aria-label'))''')
+    st = flat(strip.inner_text())
+    check('돌발정보: 버스 카드 다음 노란 줄 · 정체 원인일 수 있어요 · 공사', strip.get_attribute('data-tone') == 'caution' and strip.get_attribute('data-source') == 'seoul'
+          and order.index('경로 주변 돌발정보') == order.index('실시간 버스 도착') + 1 and '정체 원인일 수 있어요 · 공사' in st and '2건' in st, st)
+    strip.get_by_role('button').click()
+    st = flat(strip.inner_text())
+    check('돌발정보 펼침: 경로 위 공사 + 국민대 근처 행사(예정), 차량고장·먼 곳·끝난 것 제외', pg.locator('[data-testid="incident-item"]').count() == 2
+          and '정릉로 하수관 정비공사(테스트)' in st and '1711 · 171 · 1112 경로 위' in st and '거리 행사(테스트)' in st and '예정' in st
+          and '봉은교' not in st and '차량 고장' not in st and '서울시 실시간 돌발정보 · 08:1' in st, st)
+    trips = api(ctx, 8801, uid, 'GET', '/api/stops/08901/trips')
+    check('API: /api/stops/08901/trips에 incidents(seoul, 2건)', trips['incidents']['source'] == 'seoul' and [x['id'] for x in trips['incidents']['items']] == ['T-WORK', 'T-EVENT'], str(trips['incidents'])[:200])
+    strip.get_by_role('button').click()
     me = api(ctx, 8801, uid, 'GET', '/api/me')
     check('서버에 탑승 정류장 저장', (me.get('stop') or {}).get('arsId') == '08901', str(me.get('stop')))
     pg.screenshot(path=str(OUT / 'live_desktop_home.png'))
@@ -70,6 +84,8 @@ with sync_playwright() as p:
     pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
     check('설정: 실시간 데이터 배지(서울시 실시간)', pg.locator('[data-source="seoul"]').count() >= 1)
     check('설정: 서버와 동기화됨(synced)', pg.get_by_text('서버와 동기화됨(synced)').count() == 1)
+    inc = flat(pg.locator('[data-testid="incident-status"]').inner_text())
+    check('설정: 돌발정보 연결됨 · 2건', inc == '연결됨 · 2건', inc)
     pg.get_by_role('button', name='서버 푸시 켜기').click()
     pg.wait_for_selector('text=서버 푸시 켜짐(synced)', timeout=10000)
     check('서버 푸시 켜기 → synced + 서버에 구독 1개', api(ctx, 8801, uid, 'GET', '/api/me')['pushSubscriptions'] == 1)
@@ -121,10 +137,16 @@ with sync_playwright() as p:
     check('키 없음: 예시 데이터 · API 키 없음 배지', '예시 데이터 · API 키 없음' in line, line)
     check('키 없음: 출발 추천 카드가 점선(예시 데이터 기준)', pg.locator('section[aria-label="출발 추천"][data-source="mock"]').count() == 1
           and '예시 데이터 기준' in pg.locator('section[aria-label="출발 추천"]').inner_text())
+    strip = pg.locator('[data-testid="incident-strip"]')
+    order = pg.evaluate('''() => [...document.querySelectorAll('section[aria-label]')].map(s => s.getAttribute('aria-label'))''')
+    check('키 없음: 예시 돌발정보 1건 · 점선 · 세 카드 다음 · 예시 데이터 · 실시간 아님', strip.count() == 1 and strip.get_attribute('data-tone') == 'mock'
+          and order.index('경로 주변 돌발정보') > order.index('강의실 도착 예정') and '예시 데이터 · 실시간 아님' in strip.inner_text(), str(order))
     pg.screenshot(path=str(OUT / 'nokey_desktop_home.png'))
     pg.get_by_role('link', name='설정').first.click()
     pg.get_by_role('button', name='서버 푸시 켜기').wait_for(timeout=5000)
     check('키 없음: 서버 푸시 키(VAPID) 없음 안내', pg.get_by_text('VAPID').count() >= 1)
+    inc = flat(pg.locator('[data-testid="incident-status"]').inner_text())
+    check('키 없음: 설정 돌발정보 = 예시 데이터 + 키 없음 안내', inc == '예시 데이터' and pg.get_by_text('SEOUL_ACCIDENT_API_KEY도 없어요').count() == 1, inc)
     pg.get_by_role('link', name='시간표').first.click()
     pg.locator('section[aria-label="수업 검색"] input[type="search"]').fill('회로')
     pg.wait_for_selector('text=fetch_courses.py', timeout=5000)
