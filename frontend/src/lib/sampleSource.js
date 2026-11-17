@@ -10,6 +10,9 @@ import { sampleIncidentRows } from '@shared/samples/incidentSample.js';
 import { summarizeNcst } from '@shared/weather.js';
 import { sampleNcstItems } from '@shared/samples/weatherSample.js';
 import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, ruleText } from '@shared/explain.js';
+import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, legEnds, parseOdsayResult, planTransit, wantsLive } from '@shared/transitPlan.js';
+import { SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
+import { exampleSubwayJson, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
 
 export { SAMPLE_COURSE_META };
 /** 미리보기 수업 검색: 샘플 강의에서 찾음(실제 강의 목록 아님) */
@@ -93,4 +96,56 @@ export function sampleExplain(trips, { incidents, weather, busSource = 'seoul', 
     else explain = { source: 'gemini', model: 'gemini-3.5-flash-lite', text: exampleAiText(facts) };
     return { ...t, delayMin, explain: { ...explain, facts, sample: true } };
   });
+}
+
+/* ── v2.0 출발지 환승 경로(미리보기: ODsay · 서울시 실시간 지하철 형식의 예시 응답 · 실제 경로 아님) ── */
+/** 출발지 검색: 예시 출발지(홍대입구역) + 국민대 근처 샘플 정류장('700m 안' 안내 확인용) */
+export function sampleOriginSearch(q) {
+  const s = q.replace(/\s/g, '');
+  return [...SAMPLE_ORIGINS, ...STOPS].filter((st) => !s || st.name.replace(/\s/g, '').includes(s));
+}
+/** '현재 위치' 대신 쓰는 예시 위치 */
+export const SAMPLE_GPS = { lat: SAMPLE_ODSAY_ORIGIN.lat, lon: SAMPLE_ODSAY_ORIGIN.lon, label: '예시 위치(홍대입구역 근처)' };
+const SAMPLE_PATHS = parseOdsayResult(SAMPLE_ODSAY_RESPONSE).paths;
+/**
+ * 경로 검색(예시 응답): 홍대입구역 근처면 예시 경로 3개 · 국민대 700m 안이면 안내 · 그 밖은 '경로 없음'.
+ * capDemo면 '오늘 한도 초과' 화면(실제 서비스: 하루 25건)
+ */
+export function sampleTransitSearch({ lat, lon, name, kind }, { capDemo = false } = {}) {
+  const calls = (n) => ({ today: n, cap: 25, left: 25 - n }); // 예시 호출 수(실제 서비스: 서버의 오늘 ODsay 호출 수)
+  const here = { x: lon, y: lat };
+  const fb = (reason, n, extra = {}) => ({ ok: false, fallback: 'direct', reason, message: fallbackText(reason, 25), calls: calls(n), sample: true, ...extra });
+  if (distanceM(here, KOOKMIN_GATE) < TRANSIT.nearMinM) return fb('near', capDemo ? 25 : 0); // 700m 안은 ODsay를 부르지 않음
+  if (capDemo) return fb('cap', 25);
+  if (distanceM(here, { x: SAMPLE_ODSAY_ORIGIN.lon, y: SAMPLE_ODSAY_ORIGIN.lat }) > 1500) return fb('no-path', 1, { message: '미리보기에는 홍대입구역 예시 경로만 있어요(실제 서비스는 ODsay로 찾음)' });
+  return { ok: true, cached: false, searchId: 'sample:hongdae', origin: { name: name || SAMPLE_GPS.label, lat, lon, kind }, paths: SAMPLE_PATHS, calls: calls(1), sample: true };
+}
+const cycle = (m, period, phase) => { let d = (((phase - m) % period) + period) % period; if (d < 0.5) d += period; return d; };
+/**
+ * 실시간 재료(예시): 서버 /api/transit/live와 같은 모양. 지하철은 서버처럼 출발 30분 전부터만, 버스 · 지하철 도착은 배차간격으로 만든 가상 시각
+ */
+export function sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin } = {}) {
+  if (!route) return null;
+  const { first, last } = legEnds(route), legs = route.legs, m = now.minutes;
+  const out = { fetchedAt: new Date().toISOString(), first: null, final: null, sample: true };
+  const L = legs[last], F = legs[first];
+  if (L?.kind === 'bus') {
+    const term = L.intervalMin || 9, next = cycle(m, term, 4);
+    out.final = { i: last, source: 'sample', arsId: L.from.arsId, trips: [{ no: L.no, type: L.typeLabel, etasSec: [next * 60, (next + term) * 60], termMin: term, msgs: [], ended: false, inVehicleMin: Math.max(1, L.min - 1), gate: '정문', congestion: 'normal' }] };
+  }
+  if (F?.kind === 'bus' && first !== last) {
+    const term = F.intervalMin || 8, next = cycle(m, term, 2);
+    out.first = { i: first, kind: 'bus', source: 'sample', buses: [{ no: F.no, etasSec: [next * 60, (next + term) * 60], termMin: term }] };
+  }
+  if (F?.kind === 'subway') {
+    const std = cls ? planTransit({ route, cls, nowMin: m, walkTable, marginMin, personalOffsetMin }) : null;
+    if (!wantsLive(std, m)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
+    else {
+      const head = F.intervalMin || 5, next = cycle(m, head, 1), at = Math.floor(Date.now() / 1000) * 1000; // 받은 시각을 초 단위로(문자열 시각과 맞춰 1초 미만 흔들림 없게)
+      const dest = (F.stations || []).includes(F.way) ? '종착' : F.way || '종착';
+      const json = exampleSubwayJson({ subwayId: F.subwayId || '1002', station: F.from.name, next: F.next, dest, etasSec: [next * 60, (next + head) * 60, (next + 2 * head) * 60], recptnMs: at });
+      out.first = { i: first, kind: 'subway', source: 'sample', station: F.from.name, trains: trainsForLeg(parseSubwayArrivals(json, at).rows, F).map((t) => ({ etaSec: t.etaSec, approx: t.approx, dest: t.dest })) };
+    }
+  }
+  return out;
 }

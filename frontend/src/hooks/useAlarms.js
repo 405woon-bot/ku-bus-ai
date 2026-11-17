@@ -31,7 +31,8 @@ export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false, 
     setToasts((ts) => { const keep = ts.filter((t) => (t.departMin == null || t.departMin >= now.minutes - 1) && !(arrived && t.type !== 'test')); return keep.length === ts.length ? ts : keep; });
     if (arrived) { snoozes.current = []; return; }
     if (!prefs.notify || !rec || rec.state !== 'ok') return;
-    const key = `${now.dateKey}:${rec.cls.id}${mockData ? ':mock' : ''}`;
+    // 환승 경로는 기록을 따로(서버 알림과 같은 키) — 하루 중에 출발 방식을 바꿔도 지난 방식의 기록과 섞이지 않게
+    const key = `${now.dateKey}:${rec.cls.id}${rec.mode === 'transit' ? ':transit' : ''}${mockData ? ':mock' : ''}`;
     const fresh = [];
     for (const d of decideAlarms({ rec, nowMin: now.minutes, fired: fired[key] || {}, notifyBeforeMin: prefs.notifyBeforeMin })) {
       const a = mockData ? { ...d, body: `${d.body}${MOCK_NOTE}`, mock: true } : d;
@@ -56,6 +57,8 @@ export function useAlarms({ rec, now, fired, dispatch, prefs, mockData = false, 
   }, [rec, qKey, prefs.notify, prefs.notifyBeforeMin, now.dateKey, mockData, arrived]);
 
   useEffect(() => { setToasts([]); snoozes.current = []; }, [now.dateKey]);
+  // 알림 기록이 비워지면(정류장 바꿈 · 시간표 새로 · 미리보기 시계 되돌림) 이 화면에서 보낸 표시도 처음부터
+  useEffect(() => { if (!Object.keys(fired || {}).length) { sent.current.clear(); setToasts((ts) => (ts.some((t) => t.type !== 'test') ? ts.filter((t) => t.type === 'test') : ts)); } }, [fired]);
   const dismiss = useCallback((id) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
   const snooze = useCallback((t) => { snoozes.current.push({ atMin: now.minutes + 5, toast: t }); dismiss(t.id); }, [now.minutes, dismiss]);
   const test = useCallback(() => show({ type: 'test', tone: 'ok', title: '테스트 알림', body: '출발 시각이 되면 이렇게 알려 드려요.' }, 'test'), [show]);

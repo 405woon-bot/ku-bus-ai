@@ -9,3 +9,7 @@ export const sampleWeather = () => null;
 export const sampleExplain = (trips) => trips;
 export const SAMPLE_COURSE_META = null;
 export const searchSampleCourses = () => [];
+export const sampleOriginSearch = () => [];
+export const sampleTransitSearch = () => null;
+export const sampleTransitLive = () => null;
+export const SAMPLE_GPS = null;

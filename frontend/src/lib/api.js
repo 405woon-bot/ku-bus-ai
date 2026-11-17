@@ -59,6 +59,12 @@ export const api = {
   arrival: (body) => req('POST', '/api/me/arrival', body),
   arrivalUndo: (key) => req('POST', '/api/me/arrival/undo', { key }),
   personalReset: () => req('POST', '/api/me/personal/reset', {}),
+  // v2.0 출발지 환승 경로(ODsay) — 검색은 오류 대신 { ok:false, fallback:'direct' }로 답함
+  transitSearch: (body) => req('POST', '/api/transit/search', body),
+  transitSave: (searchId, pathId) => req('POST', '/api/me/transit', { searchId, pathId }),
+  transitMode: (mode) => req('POST', '/api/me/transit', { mode }),
+  transitClear: () => req('POST', '/api/me/transit', { clear: true }),
+  transitLive: () => req('GET', '/api/transit/live'),
   // 홈 화면 앱으로 설정 이어받기
   handoff: () => req('POST', '/api/me/handoff', {}),
   claimHandoff: (token) => req('POST', '/api/handoff/claim', { token }, { auth: false }), // 받기 전에는 사용자 ID를 만들지 않음

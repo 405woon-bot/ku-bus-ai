@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { firstClassOf, recommend } from '@shared/recommend.js';
+import { planTransit } from '@shared/transitPlan.js';
 import { WALK_TABLE } from '@shared/campusData.js';
 import { MODE, useAppState } from './hooks/useAppState.js';
 import { useNow } from './hooks/useNow.js';
 import { useTrips } from './hooks/useTrips.js';
+import { useTransitLive } from './hooks/useTransitLive.js';
 import { useAlarms } from './hooks/useAlarms.js';
 import { useServerSync } from './hooks/useServerSync.js';
 import { notifyPermission, requestNotifyPermission } from './lib/platform.js';
@@ -45,8 +47,8 @@ function useTab() {
   return [tab, go];
 }
 
-/** (실서비스) 서버 상태: 실시간 공급자(seoul/mock)·폴백 이유·서버 푸시 키 — 1분마다 */
-function useHealth(enabled) {
+/** (실서비스) 서버 상태: 실시간 공급자(seoul/mock)·폴백 이유·서버 푸시 키·ODsay 오늘 호출 수 — 1분마다 + 탭을 옮길 때(설정을 열면 바로 새 값) */
+function useHealth(enabled, refreshKey) {
   const [h, setH] = useState(null);
   useEffect(() => {
     if (!enabled) return undefined;
@@ -55,7 +57,7 @@ function useHealth(enabled) {
     load();
     const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
-  }, [enabled]);
+  }, [enabled, refreshKey]);
   return h;
 }
 
@@ -87,10 +89,13 @@ export default function App({ handoff = null }) {
   const [state, dispatch] = useAppState();
   const sync = useServerSync(state, dispatch, MODE === 'api');
   const [tab, go] = useTab();
+  const health = useHealth(MODE === 'api', tab);
   const now = useNow(MODE, state.preview);
-  const live = useTrips({ mode: MODE, stop: state.stop, now, previewSource: state.preview.source, previewIncidents: state.preview.incidents || 'all', previewWeather: state.preview.weather || 'rain', previewExplain: state.preview.explain || 'ai' });
-  const mockData = live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터로 계산 중
-  const health = useHealth(MODE === 'api');
+  // v2.0 출발 방식: 출발지 환승 경로(경로를 고른 뒤에만) | 단일 정류장 직행(지금까지와 같음)
+  const tr = state.transit || {};
+  const transitOn = tr.mode === 'transit' && Boolean(tr.route?.legs?.length);
+  const live = useTrips({ mode: MODE, stop: transitOn ? null : state.stop, now, previewSource: state.preview.source, previewIncidents: state.preview.incidents || 'all', previewWeather: state.preview.weather || 'rain', previewExplain: state.preview.explain || 'ai' });
+  const mockData = !transitOn && live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터로 계산 중
 
   // 캠퍼스 하차 문 → 강의 건물 도보(화면에는 표시하지 않고 계산에만 사용)
   const walkTable = useMemo(() => {
@@ -103,11 +108,14 @@ export default function App({ handoff = null }) {
   const nowKey = Math.floor(now.minutes * 12); // 5초 단위로 다시 계산
   const { walkToStopMin, marginMin } = state.prefs;
   const personalOffsetMin = state.personal?.offsetMin || 0; // '도착했어요!'로 배운 내 걸음 반영(서버 알림도 같은 값)
-  const rec = useMemo(() => (state.stop
-    ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin })
-    : null),
+  // 환승 경로의 실시간 재료(첫 지하철 · 버스, 마지막 국민대행 버스) — 서버가 지하철은 출발 30분 전부터만 받아 옴
+  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin });
+  const rec = useMemo(() => {
+    if (transitOn) return planTransit({ route: tr.route, cls: todayClass, nowMin: now.minutes, rt: tlive.rt, walkTable, marginMin, personalOffsetMin });
+    return state.stop ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin }) : null;
+  },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin]);
+  [transitOn, tr.route, tlive.rt, state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin]);
   // '도착했어요!' · K•CARD+ 캡처(이 기기에만) — 앱을 열 때 이미지를 미리 읽어 두어 누르면 바로 띄움
   const kcard = useKCard();
   const arrival = useArrival({ mode: MODE, state, dispatch, now, todayClass, ready: MODE !== 'api' || sync.status === 'synced' });
@@ -122,8 +130,8 @@ export default function App({ handoff = null }) {
   const [guide, setGuide] = useState(false);
   const [dismissed, setDismissed] = useState(readDismissed);
   useEffect(() => { if (MODE === 'sample') setDismissed(false); }, [previewKind]);
-  const hasSetup = Boolean(state.stop || state.classes.length);
-  const showBar = tab === 'home' && info.needsInstall && Boolean(state.stop) && !dismissed && !guide;
+  const hasSetup = Boolean(state.stop || state.classes.length || transitOn);
+  const showBar = tab === 'home' && info.needsInstall && Boolean(state.stop || transitOn) && !dismissed && !guide;
   const later = () => { writeDismissed(); setDismissed(true); setGuide(false); };
   useHandoffLink(MODE === 'api' && info.needsInstall && sync.status === 'synced' && hasSetup);
   // 홈 화면 앱이 처음 열려 설정을 이어받았으면 잠깐 알림
@@ -136,9 +144,22 @@ export default function App({ handoff = null }) {
     setTimeout(() => { try { document.getElementById('kcard')?.scrollIntoView({ block: 'center' }); } catch { /* 무시 */ } }, 60);
     setTimeout(() => setHlKCard(false), 2600);
   }, [go]);
+  const [hlTransit, setHlTransit] = useState(false);
+  const goTransit = useCallback((want) => { // 설정 · 출발 방식 칸으로 이동해 잠깐 강조('transit'이면 환승 경로 모드로 바꿔서)
+    if (want === 'transit' && state.transit?.mode !== 'transit') {
+      dispatch({ type: 'transitSaved', transit: { ...state.transit, mode: 'transit' } });
+      if (MODE === 'api') api.transitMode('transit').then((r) => r?.transit && dispatch({ type: 'transitSaved', transit: r.transit })).catch(() => {});
+    }
+    go('settings'); setHlTransit(true);
+    setTimeout(() => { try { document.getElementById('transit')?.scrollIntoView({ block: 'start' }); } catch { /* 무시 */ } }, 60);
+    setTimeout(() => setHlTransit(false), 2600);
+  }, [go, dispatch, state.transit]);
   const resetAll = useCallback(() => {
     dispatch({ type: 'resetAll' });
-    if (MODE === 'api') api.personalReset().catch(() => {}); // 서버에서 배운 내 걸음 반영도 처음부터
+    if (MODE === 'api') {
+      api.personalReset().catch(() => {}); // 서버에서 배운 내 걸음 반영도 처음부터
+      api.transitClear().catch(() => {}); // 고른 환승 경로도 지움(직행으로)
+    }
   }, [dispatch]);
 
   const [dialog, setDialog] = useState(null);
@@ -148,7 +169,7 @@ export default function App({ handoff = null }) {
   return (
     <div className="min-h-full">
       <Header tab={tab} onTab={go} now={now} />
-      {MODE === 'sample' && <PreviewBar preview={state.preview} dispatch={dispatch} />}
+      {MODE === 'sample' && <PreviewBar preview={state.preview} dispatch={dispatch} nowMin={now.minutes} />}
 
       {handoffToast && (
         <div role="status" data-testid="handoff-toast" className="gutter fixed inset-x-0 top-[calc(64px+env(safe-area-inset-top,0px))] z-40 mx-auto max-w-[560px]">
@@ -163,6 +184,7 @@ export default function App({ handoff = null }) {
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             arrival={{ ...arrival, cls: todayClass }} kcardReady={kcard.status === 'ready'} personal={state.personal}
+            transit={{ on: transitOn, pending: tr.mode === 'transit' && !transitOn, origin: tr.origin, route: tr.route, live: tlive }} onOpenTransit={goTransit}
             onPickStop={() => setDialog({ type: 'stop' })} onSelectStop={setStop} onGoTimetable={() => go('timetable')} />
         )}
         {tab === 'timetable' && (
@@ -179,7 +201,8 @@ export default function App({ handoff = null }) {
           <SettingsScreen mode={MODE} state={state} dispatch={dispatch} onPickStop={() => setDialog({ type: 'stop' })}
             perm={perm} onRequestPerm={async () => setPerm(await requestNotifyPermission())} onTestAlarm={alarms.test}
             info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} health={health}
-            kcard={kcard} onViewCard={arrival.view} onResetPersonal={arrival.reset} highlightKCard={hlKCard} onResetAll={resetAll} />
+            kcard={kcard} onViewCard={arrival.view} onResetPersonal={arrival.reset} highlightKCard={hlKCard} onResetAll={resetAll}
+            now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable} highlightTransit={hlTransit} />
         )}
       </main>
 

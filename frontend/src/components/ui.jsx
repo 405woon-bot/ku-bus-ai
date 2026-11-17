@@ -27,6 +27,9 @@ export const IconSearch = I(<><circle cx="11" cy="11" r="6.5" /><path d="m16 16 
 export const IconLocate = I(<><circle cx="12" cy="12" r="6.5" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" /><circle cx="12" cy="12" r="2" /></>);
 export const IconChevron = I(<path d="m9.5 5.5 6.5 6.5-6.5 6.5" />);
 export const IconReplay = I(<><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" /><path d="M4.5 4.5v4h4" /></>);
+// 지하철(앞모습) · 출발지(깃발)
+export const IconTrain = I(<><rect x="5.5" y="3" width="13" height="14" rx="3.5" /><path d="M5.5 10h13M9 21l1.5-3.5M15 21l-1.5-3.5" /><circle cx="9" cy="13.6" r=".8" /><circle cx="15" cy="13.6" r=".8" /></>);
+export const IconRoute = I(<><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M8.2 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.8" /></>);
 // 학생증(일반 카드 모양 — 학교 공식 디자인 아님) · 도착(위치 + 체크)
 export const IconIdCard = I(<><rect x="3" y="5" width="18" height="14" rx="2.5" /><circle cx="8.5" cy="11" r="2" /><path d="M5.8 16c.6-1.3 1.6-2 2.7-2s2.1.7 2.7 2M14 10h4M14 13.5h3" /></>);
 export const IconArrive = I(<><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" /><path d="m9.2 10.1 2 2 3.6-3.7" /></>);

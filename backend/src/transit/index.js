@@ -30,6 +30,8 @@ export function createMockProvider(scenario = 'jeongneung') {
     },
     searchStops: noSearch,
     nearStops: noSearch,
+    // 환승 경로의 첫 버스는 예시 데이터로 대신하지 않음(실시간이 없으면 표준 대기 시간)
+    stopArrivals: async () => { throw new SeoulApiError('no-key', '예시 데이터 모드에서는 정류장 도착 정보가 없어요'); },
   };
 }
 
@@ -206,6 +208,15 @@ export function createLiveService({
     }
   }
 
+  /**
+   * (환승 경로) 정류장 하나의 모든 노선 도착 예정 — 예시 데이터로 대신하지 않고 실패하면 예외(계산은 표준 대기 시간으로)
+   * @returns {Promise<{ arrivals, source:'seoul', fetchedAt }>}
+   */
+  async function stopArrivals(arsId) {
+    const arrivals = await lookup(() => adapter.stopArrivals(arsId));
+    return { arrivals, source: 'seoul', fetchedAt: new Date(clock()).toISOString() };
+  }
+
   // 30초마다 최근 15분 안에 요청된 노선을 미리 갱신 → 화면·스케줄러 요청은 캐시에서 바로 응답
   let timer = null;
   async function refreshActive() {
@@ -223,6 +234,7 @@ export function createLiveService({
     refreshActive,
     stationsOf: (no, busRouteId) => adapter.stationsOf(no, busRouteId),
     stopTrips,
+    stopArrivals,
     searchStops: (q) => lookup(() => adapter.searchStops(q)),
     nearStops: (lat, lon, radius = 400) => lookup(() => adapter.nearStops(lat, lon, radius)),
     health() {

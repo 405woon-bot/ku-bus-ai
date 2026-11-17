@@ -3,12 +3,14 @@ import { CONGESTION } from '@shared/stopTrips.js';
 import { reasonText } from '@shared/liveStatus.js';
 import { STATUS } from '@shared/recommend.js';
 import { personalLabel } from '@shared/arrival.js';
+import { hhmm } from '@shared/transitPlan.js';
 import { routeColor } from '../lib/palette.js';
-import { Button, IconAlert, IconBus, IconChevron, IconIdCard, IconPin, IconStop, SourceTag } from './ui.jsx';
+import { Button, IconAlert, IconBus, IconChevron, IconIdCard, IconPin, IconRoute, IconStop, SampleTag, SourceTag } from './ui.jsx';
 import { ArriveButton, ArrivalPrompt, ArrivedCard } from './Arrival.jsx';
 import { StopSearch } from './StopPicker.jsx';
 import IncidentStrip from './IncidentStrip.jsx';
 import WhyStrip from './WhyStrip.jsx';
+import RouteCard from './RouteCard.jsx';
 
 const TONE = {
   ok: 'bg-go-soft text-go', warn: 'bg-caution-soft text-caution', danger: 'bg-stop-soft text-stop', muted: 'bg-surface text-ink-muted',
@@ -91,15 +93,110 @@ function FallbackNotice({ reason }) {
 }
 const nextDayText = (c) => (c ? `다음 등교: ${DAYS[c.day]}요일 ${c.start} ${c.name}` : '시간표 탭에서 수업을 등록해 주세요.');
 
+/* ── v2.0 출발지 환승 경로 모드 ── */
+/** 출발지 칩: 출발지 → 국민대 · 바꾸기(설정 · 출발 방식으로) */
+function OriginChip({ origin, onClick }) {
+  return (
+    <button type="button" onClick={onClick} data-testid="origin-chip" aria-label={`출발지 ${origin?.name || ''} · 환승 경로 바꾸기`} className="flex h-11 w-full items-center gap-2 rounded-2xl border border-line bg-panel px-3.5 text-left shadow-card transition-colors hover:border-primary-line short:h-10">
+      <IconRoute className="h-5 w-5 shrink-0 text-primary" />
+      <span className="shrink-0 text-[13px] font-semibold text-ink-muted">출발</span>
+      <span className="min-w-0 flex-1 truncate text-[15px] font-bold">{origin?.name || '출발지'}<span className="font-semibold text-ink-muted"> → 국민대</span></span>
+      <span className="flex shrink-0 items-center text-[13px] font-semibold text-primary">바꾸기<IconChevron className="h-4 w-4" /></span>
+    </button>
+  );
+}
+
+/** 환승 경로 모드인데 아직 경로를 고르지 않음 → 직행으로 안내 중 */
+function TransitPending({ onClick }) {
+  return (
+    <section aria-label="환승 경로 안내" data-testid="transit-pending" className="flex items-center gap-2 rounded-2xl border border-dashed border-primary-line bg-primary-soft px-3.5 py-2 text-[13px] leading-snug text-ink">
+      <IconRoute className="h-4 w-4 shrink-0 text-primary" />
+      <p className="min-w-0 flex-1">출발지 환승 경로를 아직 고르지 않아 <b className="font-semibold">단일 정류장 직행</b>으로 안내해요</p>
+      <Button size="sm" onClick={onClick}>경로 고르기</Button>
+    </section>
+  );
+}
+
+/** 첫 탑승 · 마지막 국민대행 버스가 어디서 온 값인지(실시간 · 출발 30분 전부터 · 못 받음 → 배차로 예상) */
+function transitParts(rt) {
+  const parts = [], f = rt?.first, l = rt?.final;
+  if (f?.kind === 'subway') {
+    parts.push(f.source === 'seoul' ? '첫 지하철 실시간' : f.source === 'skip' ? '첫 지하철 실시간은 출발 30분 전부터'
+      : f.source === 'nodata' ? '첫 지하철 실시간 없음(배차로 예상)' : '첫 지하철 실시간 못 받음(배차로 예상)');
+  } else if (f?.kind === 'bus') {
+    parts.push(f.source === 'seoul' ? (f.buses?.length ? '첫 버스 실시간' : '첫 버스 도착 정보 없음(배차로 예상)') : '첫 버스 실시간 못 받음(배차로 예상)');
+  }
+  if (l) parts.push(l.source === 'seoul' ? '국민대행 버스 실시간' : '국민대행 버스 실시간 못 받음(배차로 예상)');
+  return parts;
+}
+/** 환승 경로 카드 오른쪽 위 태그: 실시간 반영 · 예상(실시간 전) · 예상 · 예시 데이터 */
+export function transitTag(tl, rec) {
+  if (tl?.sample) return 'sample';
+  const used = rec?.state === 'ok' && rec.pick.legs.some((s) => s.kind !== 'walk' && s.src === 'live');
+  if (used) return 'live';
+  return tl?.rt?.first?.source === 'skip' ? 'std' : null;
+}
+/** 환승 경로 모드 카드 아래 데이터 출처 줄 */
+function TransitDataLine({ tl }) {
+  if (tl?.sample) {
+    return (
+      <div data-testid="data-line" data-mode="transit" className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 pt-1 text-xs text-ink-muted">
+        <SampleTag>예시 데이터 · 실시간 아님</SampleTag><span>ODsay · 서울시 형식의 예시 응답이에요</span>
+      </div>
+    );
+  }
+  const at = tl?.at ? CLOCK.format(new Date(tl.at)) : null, parts = transitParts(tl?.rt);
+  let tag = null, text, warn = false;
+  if (!tl || tl.status === 'idle' || tl.status === 'loading') text = '실시간 정보를 불러오는 중 · 그동안 배차간격으로 예상해요';
+  else if (tl.status === 'error') { text = '서버에 연결하지 못했어요 · 배차간격으로 예상해 보여 주는 중'; warn = true; }
+  else {
+    if (tl.rt?.first?.source === 'seoul' || tl.rt?.final?.source === 'seoul') tag = <SourceTag source="seoul" stale={tl.status === 'stale'} />;
+    text = tl.status === 'stale' ? `서버 연결이 끊겨 ${at} 정보를 보여 주는 중 · ${parts.join(' · ')}` : `${parts.join(' · ')}${at ? ` · ${at} 갱신` : ''}`;
+    warn = tl.status === 'stale';
+  }
+  return (
+    <div data-testid="data-line" data-mode="transit" className={`flex flex-wrap items-center justify-center gap-x-2 gap-y-1 pt-1 text-center text-xs ${warn ? 'text-caution' : 'text-ink-muted'}`}>
+      {tag}<span>{text}</span>
+    </div>
+  );
+}
+/** ① 출발 추천(환승): 큰 출발 시각 + 첫 탑승(노선 색 배지 · 탑승 시각 · 역/정류장) */
+function TransitDepart({ rec, now }) {
+  const p = rec.pick, t = p.trip;
+  const left = Math.max(1, Math.ceil(p.departMin - now.minutes - 1e-6));
+  const leftText = left >= 60 ? `${Math.floor(left / 60)}시간 ${left % 60}분 뒤` : `${left}분 뒤`;
+  const light = t.ink !== '#FFFFFF'; // 밝은 노선 색(노랑 등)은 색 배지 + 진한 글자
+  const where = t.kind === 'subway' && t.stop && !/역$/.test(t.stop) ? `${t.stop}역` : t.stop;
+  return (
+    <section aria-label="출발 추천" data-mode="transit" data-source={p.live ? 'live' : 'std'} className={`min-w-0 rounded-3xl px-5 pb-5 pt-4 text-white shadow-card sm:px-6 sm:pb-6 sm:pt-5 short:pb-4 short:pt-3 ${rec.status === 'late' ? 'bg-stop' : 'bg-primary'}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[15px] font-bold text-white/90">{rec.status === 'late' ? '지각 위험 · 서두르세요' : '출발 추천 · 환승 경로'}</span>
+        {!rec.departNow && <span className="rounded-full bg-white/15 px-3 py-1 text-[13px] font-semibold">{leftText}</span>}
+      </div>
+      <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2.5">
+        {rec.departNow
+          ? <span className="text-[48px] font-bold leading-none tracking-tight sm:text-[56px]">지금 출발</span>
+          : <><span className="num text-[72px] font-bold leading-[0.85] tracking-tight sm:text-[80px] short:text-[62px]">{hhmm(p.departMin)}</span><span className="text-[24px] font-bold">출발</span></>}
+      </p>
+      <p className="mt-4 flex min-w-0 items-center gap-1.5 text-[17px] font-semibold sm:mt-5 short:mt-3">
+        <span data-testid="first-badge" className="num inline-grid h-7 min-w-[48px] shrink-0 place-items-center rounded-md px-2 text-[16px] font-bold" style={light ? { background: t.color, color: t.ink } : { background: '#FFFFFF', color: t.color }}>{t.no}</span>
+        <span className="shrink-0">{t.kind === 'bus' ? '번 버스 ' : ''}<span className="num text-[19px]">{hhmm(p.boardMin)}</span> 탑승</span>
+        <span className="min-w-0 truncate text-[14px] font-medium text-white/80">· {where}</span>
+      </p>
+    </section>
+  );
+}
+
 /**
  * 홈: ① 출발 추천 시각 ② 실시간 버스 도착 + 도로 정체 (+ 경로 주변 날씨 · 돌발정보 한 줄) ③ 강의실 도착 예정 + 상태.
  * 계산 과정(도보·차내 시간 내역, 공식)은 보여 주지 않습니다.
  * 오늘 첫 수업 시작 30분 전 ~ 15분 뒤에는 ③ 카드에 [도착했어요!](상태 태그 자리, 상태는 아랫줄로) → 기록하면 수업이 끝날 때까지 '도착 기록' 카드
  * @param {object} p.arrival  useArrival 결과 + cls(오늘 첫 수업)
  */
-export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, arrival, kcardReady, personal, onPickStop, onSelectStop, onGoTimetable }) {
-  if (!stop && syncing) return <div className="mx-auto h-48 w-full max-w-[560px] animate-pulse rounded-3xl bg-line/70" aria-busy="true" aria-label="불러오는 중" />;
-  if (!stop) {
+export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, arrival, kcardReady, personal, onPickStop, onSelectStop, onGoTimetable, transit = null, onOpenTransit }) {
+  const tOn = Boolean(transit?.on); // 출발지 환승 경로 모드(경로를 고른 뒤) — 아니면 지금까지와 같은 단일 정류장 직행
+  if (!stop && !tOn && syncing) return <div className="mx-auto h-48 w-full max-w-[560px] animate-pulse rounded-3xl bg-line/70" aria-busy="true" aria-label="불러오는 중" />;
+  if (!stop && !tOn) {
     return (
       <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-4">
         <section className="grid grid-cols-1 gap-4 rounded-3xl border border-line bg-panel px-5 py-6 shadow-card sm:px-6">
@@ -108,12 +205,17 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
             <p className="mt-1 text-[15px] text-ink-muted">집 주소는 필요 없어요. 매일 타는 정류장 하나만 고르면 출발 시각을 알려 드려요.</p>
           </div>
           <StopSearch mode={mode} onSelect={onSelectStop} />
+          {onOpenTransit && (
+            <button type="button" onClick={() => onOpenTransit('transit')} data-testid="open-transit" className="flex items-center gap-1.5 justify-self-start text-[13px] font-semibold text-primary hover:underline">
+              <IconRoute className="h-4 w-4" />환승해서 가요 · 집이나 역에서 출발지 환승 경로로 찾기<IconChevron className="h-4 w-4" />
+            </button>
+          )}
         </section>
       </div>
     );
   }
 
-  const mock = live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터
+  const mock = !tOn && live?.source === 'mock'; // 서울시 실시간 대신 예시 데이터(직행 모드)
   const a = arrival || {}, phase = a.phase || null;
   const sending = a.send && (a.send.status === 'saving' || a.send.status === 'pending') ? a.send : null;
   const arrived = Boolean((a.record || sending) && phase && phase !== 'after'); // 기록 뒤 ~ 수업 끝날 때까지
@@ -137,7 +239,9 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
       body = <Message title={title}>{nextDayText(nextClass)}{a.record ? ` · 오늘 ${toHHMM(Math.floor(a.record.arriveMin + 1e-9))} 도착 기록(내 걸음 ${personalLabel(personal?.offsetMin)})` : ''}</Message>;
     }
   } else if (!rec || rec.state === 'no-trip') {
-    if (live?.status === 'loading' || live?.status === 'idle') {
+    if (tOn) {
+      body = <Message title="저장한 환승 경로를 읽지 못했어요" action={<Button variant="primary" onClick={() => onOpenTransit('transit')}>경로 다시 고르기</Button>}>설정 · 출발 방식에서 출발지를 다시 검색해 주세요.</Message>;
+    } else if (live?.status === 'loading' || live?.status === 'idle') {
       body = <div className="grid grid-cols-1 gap-4" aria-busy="true" aria-label="불러오는 중">{[196, 124, 124].map((h, i) => <div key={i} className="animate-pulse rounded-3xl bg-line/70" style={{ height: h }} />)}</div>;
     } else if (live?.status === 'error') {
       body = <Message title="실시간 버스 정보를 불러오지 못했어요">{live.error} 잠시 뒤 자동으로 다시 시도해요.</Message>;
@@ -148,6 +252,24 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
         </Message>
       );
     }
+  } else if (rec.mode === 'transit') {
+    // 환승 경로: ① 출발 추천(첫 탑승) ③ 강의실 도착(상태 · 도착했어요!) ② 환승 경로 카드(타임라인 · 실시간) — 첫 화면에 출발 · 도착이 함께 보이게
+    const p = rec.pick, st = STATUS[rec.status];
+    const classLine = `${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`;
+    body = (
+      <>
+        <TransitDepart rec={rec} now={now} />
+        <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />}
+          caption={<>강의실 도착{rec.personalMin ? <span data-testid="personal-hint" className="font-normal"> · 내 걸음 {personalLabel(rec.personalMin)}</span> : null}</>}
+          tag={canPress ? <ArriveButton onClick={a.press} busy={a.busy} /> : <Signal tone={st.tone}>{st.label}</Signal>}
+          sub={canPress
+            ? <><b data-tone={st.tone} className={`font-semibold ${TONE_TEXT[st.tone]}`}>{st.label}</b> · {classLine}</>
+            : classLine}>
+          <span className="num">{hhmm(p.classArriveMin)}</span> 강의실 도착 예정
+        </InfoCard>
+        <RouteCard route={transit.route} plan={rec} badge="내 경로" liveTag={transitTag(transit.live, rec)} nowMin={now.minutes} testId="transit-route" sample={Boolean(transit.live?.sample)} />
+      </>
+    );
   } else {
     const p = rec.pick, t = p.trip, st = STATUS[rec.status], cg = CONGESTION[rec.nextBus.congestion] || CONGESTION.unknown;
     // 정체 원인(도로 이름)은 보통·혼잡일 때만 짧게 덧붙임 — 표에 없는 구간(정류장 이름)은 생략
@@ -205,12 +327,13 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
   // 버스 정보를 못 받는 중(오류 · 노선 없음 · 불러오는 중)이어도 버튼 시간이면 도착 기록은 할 수 있게
   const prompt = canPress && rec?.state !== 'ok' && rec?.state !== 'started' && a.cls ? <ArrivalPrompt cls={a.cls} busy={a.busy} onArrive={a.press} /> : null;
   return (
-    <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-3 short:gap-2.5">
-      <StopChip stop={stop} onClick={onPickStop} />
-      {mock && !arrived && <FallbackNotice reason={live.reason} />}
+    <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-3 short:gap-2.5" data-mode={tOn ? 'transit' : 'direct'}>
+      {tOn ? <OriginChip origin={transit.origin} onClick={() => onOpenTransit('transit')} /> : <StopChip stop={stop} onClick={onPickStop} />}
+      {!tOn && transit?.pending && <TransitPending onClick={() => onOpenTransit('transit')} />}
+      {!tOn && mock && !arrived && <FallbackNotice reason={live.reason} />}
       {prompt}
       {body}
-      {!arrived && <DataLine live={live} />}
+      {!arrived && (tOn ? rec?.state === 'ok' && <TransitDataLine tl={transit.live} /> : <DataLine live={live} />)}
     </div>
   );
 }

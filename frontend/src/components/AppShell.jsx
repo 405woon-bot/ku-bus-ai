@@ -50,9 +50,10 @@ export function TabBar({ tab, onTab }) {
 
 const SPEEDS = [1, 10, 60];
 // '도착했어요!' 미리보기용 시각 이동(같은 날 안에서) — 예시 첫 수업은 월 09:00 자료구조(버튼 08:30 ~ 09:15, 수업 ~10:15)
-export const PREVIEW_TIMES = [[8 * 60 + 5, '08:05 출발 전'], [8 * 60 + 45, '08:45 도착(일찍)'], [8 * 60 + 57, '08:57 도착(빠듯)'], [9 * 60 + 5, '09:05 수업 시작 뒤'], [9 * 60 + 30, '09:30 수업 중']];
+// 환승 경로(예시: 홍대입구역 출발)는 07:39쯤 출발 → 07:05는 지하철 실시간 전(출발 30분 전부터), 07:30은 실시간 시간대
+export const PREVIEW_TIMES = [[7 * 60 + 5, '07:05 환승 · 실시간 전'], [7 * 60 + 30, '07:30 환승 · 출발 전'], [7 * 60 + 40, '07:40 환승 · 출발 알림'], [8 * 60 + 5, '08:05 출발 전'], [8 * 60 + 45, '08:45 도착(일찍)'], [8 * 60 + 57, '08:57 도착(빠듯)'], [9 * 60 + 5, '09:05 수업 시작 뒤'], [9 * 60 + 30, '09:30 수업 중']];
 /** 미리보기 전용 띠: 샘플 응답 재생 중임을 밝히고, 시계를 빨리 돌려 알림을 확인할 수 있게 합니다. */
-export function PreviewBar({ preview, dispatch }) {
+export function PreviewBar({ preview, dispatch, nowMin = null }) {
   return (
     <div className="border-b border-dashed border-ink-muted/50 bg-surface">
       <div className="gutter mx-auto flex max-w-[960px] flex-wrap items-center gap-x-2 gap-y-1.5 py-1.5 text-[12px] text-ink-muted">
@@ -113,7 +114,11 @@ export function PreviewBar({ preview, dispatch }) {
         {/* '도착했어요!' 버튼 시간(수업 시작 30분 전 ~ 15분 뒤)으로 시계 옮기기 — 같은 날이라 도착 기록은 그대로 */}
         <label className="flex w-full items-center gap-1 md:w-auto">
           <span className="whitespace-nowrap font-semibold text-ink">시각 이동</span>
-          <select aria-label="미리보기 시각 이동" value="" onChange={(e) => { const at = Number(e.target.value); if (Number.isFinite(at) && e.target.value !== '') dispatch({ type: 'setPreview', patch: { at, jump: (preview.jump || 0) + 1 } }); }}
+          <select aria-label="미리보기 시각 이동" value="" onChange={(e) => {
+              const at = Number(e.target.value);
+              // 시계를 되돌리면(예: 08:05 → 07:30) 그 날 알림 기록도 처음부터 — 지난 기록 때문에 '앞당겨졌어요'가 잘못 울리지 않게(미리보기 전용)
+              if (Number.isFinite(at) && e.target.value !== '') dispatch({ type: 'setPreview', patch: { at, jump: (preview.jump || 0) + 1 }, clearFired: Number.isFinite(nowMin) && at < nowMin - 0.5 });
+            }}
             className="h-7 rounded-md border border-line bg-panel px-1 text-[12px] font-semibold text-ink">
             <option value="">고르기</option>
             {PREVIEW_TIMES.map(([m, label]) => <option key={m} value={m}>{label}</option>)}

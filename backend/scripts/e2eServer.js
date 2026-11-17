@@ -1,5 +1,6 @@
 // e2e 전용 서버: 가짜 서울시 API · 돌발정보 · 기상청 · Gemini · Upstash(테스트 고정 응답)를 넣은 서버(8801, VAPID 키 있음)와 키 없는 서버(8802)를 띄웁니다.
 // 8801의 푸시는 실제 푸시 서버로 보내지 않고, 0.3초 뒤 '휴대폰 서비스 워커가 받았다'고 /api/push/ack를 대신 불러 수신 확인 흐름을 시험합니다.
+// v2.0: 8801에 가짜 ODsay(하루 상한 3건으로 줄여 '한도 초과 → 직행 안내'까지) · 가짜 서울시 실시간 지하철. 8802는 키 없음(직행 안내)
 // 실행: node scripts/e2eServer.js   (frontend/dist가 먼저 빌드되어 있어야 함)
 import webpush from 'web-push';
 import { createApp } from '../src/server.js';
@@ -16,6 +17,12 @@ import { createWeatherService } from '../src/transit/kmaWeather.js';
 import { fakeGeminiFetch } from '../test/fixtures/geminiFixture.js';
 import { createExplainService } from '../src/transit/geminiExplain.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '../../shared/samples/sampleCourses.js';
+import { SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
+import { createKv } from '../src/transit/kv.js';
+import { createOdsayService } from '../src/transit/odsay.js';
+import { createSubwayService } from '../src/transit/seoulSubway.js';
+import { ODSAY_TEST_KEY, fakeOdsayFetch } from '../test/fixtures/odsayFixture.js';
+import { SUBWAY_TEST_KEY, fakeSubwayFetch } from '../test/fixtures/subwayFixture.js';
 
 const base = new Date('2026-11-08T23:10:00Z').getTime(), t0 = Date.now(); // 서울 월 08:10부터 흐르는 시계
 const now = () => new Date(base + (Date.now() - t0));
@@ -37,7 +44,15 @@ const fakeDevice = async (s, body) => { // 가짜 휴대폰: 받으면 0.3초 �
 const upstash = upstashUsers(createUpstash({ url: UPSTASH_URL, token: 'UPSTASH-TEST-TOKEN', fetchImpl: fakeUpstashFetch() }));
 const store8801 = createStore(null, { remote: upstash, log: quiet });
 await store8801.ready;
-createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice }) })
+// 가짜 ODsay 응답: 예시 경로의 마지막 버스를 가짜 서울시 정류장(08901 정릉시장)의 171번으로 → 국민대행 실시간이 붙음
+const odsayResponse = JSON.parse(JSON.stringify(SAMPLE_ODSAY_RESPONSE));
+Object.assign(odsayResponse.result.path[0].subPath[5], { startName: '정릉시장', startArsID: '08-901', lane: [{ busNo: '171', type: 11, busID: 1 }] });
+const odsay = createOdsayService({
+  env: { ODSAY_API_KEY: ODSAY_TEST_KEY, ODSAY_DAILY_CAP: '3' }, kv: createKv({ clock: () => now().getTime() }), clock: () => now().getTime(), log: quiet,
+  fetchImpl: fakeOdsayFetch({ respond: (u) => (u.searchParams.get('apiKey') === ODSAY_TEST_KEY ? odsayResponse : null) }),
+});
+const subway = createSubwayService({ env: { SEOUL_SUBWAY_KEY: SUBWAY_TEST_KEY }, fetchImpl: fakeSubwayFetch({ clock: () => now().getTime() }), clock: () => now().getTime(), log: quiet });
+createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, odsay, subway, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice }) })
   .listen(8801, () => console.log('fixture seoul server 8801'));
 const nokey = createLiveService({ env: {}, background: false, log: quiet });
 createApp({ store: createStore(null), provider: nokey, now, pusher: createPusher({}, quiet), incidents: createAccidentService({ env: {}, clock: () => now().getTime() }), weather: createWeatherService({ env: {}, clock: () => now().getTime() }), explainer: createExplainService({ env: {}, clock: () => now().getTime() }) })

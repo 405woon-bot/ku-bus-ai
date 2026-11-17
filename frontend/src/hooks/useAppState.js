@@ -20,8 +20,11 @@ export const initialState = () => ({
   fired: {},                         // `${날짜}:${수업id}` → 보낸 알림
   personal: emptyPersonal(),         // 내 걸음 반영(실서비스는 서버 값을 받아 둠)
   arrivals: [],                      // 최근 도착 기록(같은 날 같은 수업은 한 번)
+  transit: emptyTransit(),           // v2.0 출발 방식: direct(단일 정류장 직행) | transit(출발지 환승 경로) + 고른 경로
   log: [],
 });
+
+export function emptyTransit() { return { mode: 'direct', origin: null, route: null, savedAt: null }; }
 
 let seq = 0;
 const newId = () => `c${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -38,12 +41,13 @@ function reducer(s, a) {
     case 'restoreClasses': return { ...s, classes: a.classes };
     case 'setStop': return { ...s, stop: a.stop, fired: {} };
     case 'setPrefs': return { ...s, prefs: { ...s.prefs, ...a.patch } };
-    case 'setPreview': return { ...s, preview: { ...s.preview, ...a.patch, epoch: a.rearm ? s.preview.epoch + 1 : s.preview.epoch }, fired: a.rearm ? {} : s.fired };
+    case 'setPreview': return { ...s, preview: { ...s.preview, ...a.patch, epoch: a.rearm ? s.preview.epoch + 1 : s.preview.epoch }, fired: a.rearm || a.clearFired ? {} : s.fired };
     case 'alarmFired': {
       const cur = s.fired[a.key] || {};
       const slot = a.alarm.type === 'earlier' ? 'depart' : a.alarm.type;
       return { ...s, fired: { ...s.fired, [a.key]: { ...cur, [slot]: { departMin: a.alarm.departMin } } }, log: [{ ...a.alarm, key: a.key }, ...s.log].slice(0, 20) };
     }
+    case 'transitSaved': return { ...s, transit: { ...emptyTransit(), ...(a.transit || {}) } };
     case 'arrivalSaved': return { ...s, personal: a.personal || emptyPersonal(), arrivals: Array.isArray(a.arrivals) ? a.arrivals : s.arrivals };
     case 'hydrate': return { ...s, ...a.patch };
     case 'resetAll': return initialState();

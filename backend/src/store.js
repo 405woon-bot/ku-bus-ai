@@ -1,4 +1,4 @@
-// 사용자 저장소: 시간표 · 탑승 정류장 · 설정 · 푸시 구독 · 보낸 알림 기록 · 내 걸음 반영(도착 기록).
+// 사용자 저장소: 시간표 · 탑승 정류장 · 설정 · 푸시 구독 · 보낸 알림 기록 · 내 걸음 반영(도착 기록) · 출발 방식(환승 경로).
 //   - 외부 DB(Upstash Redis): 환경변수 UPSTASH_REDIS_REST_URL · UPSTASH_REDIS_REST_TOKEN이 있으면.
 //     서버가 시작할 때 전부 읽어 오고(store.ready), 바뀐 사용자만 0.3초 뒤 모아서 저장 → 서버가 잠들거나 다시 배포돼도 그대로
 //   - 없으면 JSON 파일(DATA_FILE, 로컬 개발용). Render 무료 서버에서는 잠들거나 재시작하면 지워집니다.
@@ -42,10 +42,12 @@ export const defaultUser = () => ({
   walkOverrides: {},
   push: [],        // Web Push 구독(기기별, 최대 5개) + 기기 정보 · 수신 확인 시각
   pushLog: [],     // 보낸 알림(테스트 · 출발 알림) 기록 — 서비스 워커가 '받았음'을 알리면 ackAt
-  fired: {},       // `${dateKey}:${classId}` → 보낸 알림 기록
+  fired: {},       // `${dateKey}:${classId}`(환승 경로는 끝에 ':transit') → 보낸 알림 기록
   handoff: null,   // 홈 화면 앱으로 설정 이어받기 코드 { token, exp, usedAt }
   personal: emptyPersonal(), // 내 걸음 반영 { offsetMin(−5 ~ +15), samples, updatedAt } — '도착했어요!'로 배움
   arrivals: [],    // 최근 도착 기록(최대 20개) — 같은 날 같은 수업은 한 번만
+  // v2.0 출발 방식: 'direct'(단일 정류장 직행) | 'transit'(출발지 환승 경로, ODsay에서 고른 경로를 그대로 저장)
+  transit: { mode: 'direct', origin: null, route: null, savedAt: null },
   updatedAt: 0,
 });
 

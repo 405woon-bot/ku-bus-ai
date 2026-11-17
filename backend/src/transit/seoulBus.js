@@ -154,6 +154,9 @@ export function createSeoulAdapter({
     parseStopSearch((await client.call('stationinfo/getStationByPos', { tmX: lon.toFixed(7), tmY: lat.toFixed(7), radius: String(radius) })).items)
       .sort((a, b) => (a.distM || 0) - (b.distM || 0)));
 
+  /** 정류장 하나의 모든 노선 도착 예정(국민대행이 아니어도) — 환승 경로의 첫 버스용 */
+  const stopArrivals = async (arsId) => parseArrivals(await arrivalsAt(arsId));
+
   /** 탑승 정류장 하나 → 국민대로 가는 노선별 실시간 도착·차내 시간·정체·원인 */
   async function stopTrips(arsId) {
     const arrivals = parseArrivals(await arrivalsAt(arsId));
@@ -208,5 +211,5 @@ export function createSeoulAdapter({
     const id = await routeId(no, explicitId);
     return { busRouteId: id, stations: await stations(id) };
   }
-  return { routeLive, stationsOf, routeId, searchStops, nearStops, stopTrips };
+  return { routeLive, stationsOf, routeId, searchStops, nearStops, stopTrips, stopArrivals };
 }

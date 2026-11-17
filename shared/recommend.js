@@ -77,13 +77,14 @@ export function recommend({ trips, cls, nowMin, walkTable, walkToStopMin = DEFAU
 export function decideAlarms({ rec, nowMin, fired = {}, notifyBeforeMin = DEFAULTS.notifyBeforeMin }) {
   if (!rec || rec.state !== 'ok') return [];
   const p = rec.pick, t = p.trip, st = STATUS[rec.status];
-  const ride = `${t.no}번 ${toHHMM(p.boardMin)} 탑승 · 강의실 ${toHHMM(p.classArriveMin)} 도착 예정(${st.label})`;
+  // 환승 경로(shared/transitPlan.js)는 첫 탑승 이름(label)이 따로 옴: '110B번' · '4호선'
+  const ride = `${t.label || `${t.no}번`} ${toHHMM(p.boardMin)} 탑승 · 강의실 ${toHHMM(p.classArriveMin)} 도착 예정(${st.label})`;
   const out = [];
   if (!fired.depart && nowMin >= p.departMin - notifyBeforeMin) {
     const left = Math.ceil(p.departMin - nowMin);
     out.push({ type: 'depart', tone: st.tone, departMin: p.departMin, title: left > 0 ? `${left}분 뒤 출발하세요 (${toHHMM(p.departMin)})` : '지금 출발하세요', body: ride });
   } else if (fired.depart && p.departMin <= fired.depart.departMin - 3) {
-    out.push({ type: 'earlier', tone: 'warn', departMin: p.departMin, title: `출발 시각이 ${toHHMM(p.departMin)}로 앞당겨졌어요`, body: `도로 정체가 늘었어요. ${ride}` });
+    out.push({ type: 'earlier', tone: 'warn', departMin: p.departMin, title: `출발 시각이 ${toHHMM(p.departMin)}로 앞당겨졌어요`, body: `${rec.mode === 'transit' ? '실시간 도착 정보가 바뀌었어요.' : '도로 정체가 늘었어요.'} ${ride}` });
   }
   if (rec.status !== 'relaxed' && !fired.risk) {
     out.push({ type: 'risk', tone: st.tone, departMin: p.departMin, title: rec.status === 'late' ? '지각 위험이에요' : '도착이 빠듯해요', body: `${ride}. ${rec.status === 'late' ? '지금 바로 출발하세요.' : '서둘러 주세요.'}` });

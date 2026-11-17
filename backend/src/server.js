@@ -9,7 +9,7 @@ import { createCacheFromEnv } from './transit/cache.js';
 import { reasonText } from '../../shared/liveStatus.js';
 import { createPusher, pushSummary, sendAndLog, upsertSubscription, validSubscription } from './push.js';
 import { createScheduler } from './scheduler.js';
-import { planFor } from './planner.js';
+import { planFor, walkTableFor } from './planner.js';
 import { parseTimetableText } from '../../shared/parseTimetableText.js';
 import { BUILDINGS, GATES, WALK_TABLE, DEFAULT_WALK_MIN } from '../../shared/campusData.js';
 import { seoulParts, toHHMM, toMin } from '../../shared/time.js';
@@ -21,6 +21,10 @@ import { createExplainService } from './transit/geminiExplain.js';
 import { delayMinutes } from '../../shared/explain.js';
 import { firstClassOf } from '../../shared/recommend.js';
 import { arrivalKey, arrivalWindow, emptyPersonal, keepArrivals, recordArrival, undoArrival } from '../../shared/arrival.js';
+import { createKvFromEnv } from './transit/kv.js';
+import { createOdsayService } from './transit/odsay.js';
+import { createSubwayService } from './transit/seoulSubway.js';
+import { transitLive } from './transit/transitLive.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
@@ -54,8 +58,10 @@ function validClass(c, i) {
  * incidents = createAccidentService() — 서울시 돌발정보(없으면 돌발정보 기능 꺼짐)
  * weather = createWeatherService() — 기상청 초단기실황(없으면 날씨 꺼짐)
  * explainer = createExplainService() — '왜 늦나요?' 한 줄(Gemini, 실패하면 기본 안내). 없으면 지연 분(delayMin)만 붙임
+ * odsay = createOdsayService() — 출발지 환승 경로(ODsay, 하루 25건 · 30일 캐시). 없으면 경로 검색은 '직행으로 안내'
+ * subway = createSubwayService() — 서울시 실시간 지하철(환승 경로의 첫 지하철). 없으면 표준 대기 시간
  */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -76,6 +82,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       incidents: incidents?.health?.() ?? { keyConfigured: false },
       weather: weather?.health?.() ?? { keyConfigured: false },
       explain: explainer?.health?.() ?? { keyConfigured: false },
+      odsay: odsay?.health?.() ?? { keyConfigured: false },
+      seoulSubway: subway?.health?.() ?? { keyConfigured: false },
     });
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));
@@ -178,6 +186,43 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     res.json({ ok: true, ...personalOf(store.user(req.userId)) });
   });
 
+  // ── v2.0 출발지 환승 경로: ODsay 추천 경로(최대 3개) 고르기 · 저장 · 실시간(지하철 · 버스) ──
+  //   검색은 오류를 내지 않고 { ok:false, fallback:'direct', reason, message }로 답함(한도 초과 · 키 없음 · 경로 없음 → 직행 안내)
+  app.post('/api/transit/search', async (req, res) => {
+    const b = req.body || {};
+    if (!odsay) return res.json({ ok: false, fallback: 'direct', reason: 'no-key', message: '서버에 ODSAY_API_KEY가 없어 경로를 찾을 수 없어요 — 단일 정류장 직행으로 안내해요' });
+    res.json(await odsay.search({ lat: Number(b.lat), lon: Number(b.lon), name: clean(b.name, 40), kind: b.kind === 'gps' ? 'gps' : 'stop', arsId: clean(b.arsId, 10) }));
+  });
+  // 출발 방식 바꾸기({ mode }) · 고른 경로 저장({ searchId, pathId } — 서버에 남아 있는 검색 결과에서 그대로 복사) · 지우기({ clear:true })
+  app.post('/api/me/transit', async (req, res) => {
+    const b = req.body || {};
+    if (b.searchId) {
+      const hit = odsay ? await odsay.byId(clean(b.searchId, 120)) : null;
+      const route = hit?.paths?.find((p) => p.id === clean(b.pathId, 8));
+      if (!route) return res.status(404).json({ error: '검색 결과가 만료됐어요. 출발지를 다시 검색해 주세요' });
+      store.update(req.userId, (u) => { u.transit = { mode: 'transit', origin: hit.origin, route, savedAt: now().toISOString() }; });
+      return res.json({ ok: true, transit: store.user(req.userId).transit });
+    }
+    if (b.clear === true) { // '처음 상태로 되돌리기': 고른 경로까지 지우고 직행으로
+      store.update(req.userId, (u) => { u.transit = { mode: 'direct', origin: null, route: null, savedAt: null }; });
+      return res.json({ ok: true, transit: store.user(req.userId).transit });
+    }
+    if (b.mode === 'direct' || b.mode === 'transit') {
+      store.update(req.userId, (u) => { u.transit = { ...u.transit, mode: b.mode }; });
+      return res.json({ ok: true, transit: store.user(req.userId).transit });
+    }
+    res.status(400).json({ error: 'mode(direct · transit) 또는 searchId · pathId가 필요해요' });
+  });
+  // 저장한 경로의 실시간 재료(화면이 30초마다): 첫 탑승(지하철은 출발 30분 전부터) · 마지막 국민대행 버스
+  app.get('/api/transit/live', async (req, res) => {
+    const u = store.user(req.userId), route = u.transit?.route;
+    if (!route) return res.status(404).json({ error: '저장한 환승 경로가 없어요' });
+    const p = seoulParts(now()), cls = p.weekday < 5 ? firstClassOf(u.classes, p.weekday) : null;
+    try {
+      res.json(await transitLive({ route, provider, subway, nowDate: now(), cls, walkTable: walkTableFor(u), marginMin: u.prefs.marginMin, personalOffsetMin: u.personal?.offsetMin || 0, force: req.query.force === '1' }));
+    } catch (e) { res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
+  });
+
   // 수업 검색(시간표 탭): courses.json에서 과목명·교수명·과목번호로 찾기
   app.get('/api/courses/meta', (_req, res) => res.json(courses.meta));
   app.get('/api/courses', (req, res) => {
@@ -271,8 +316,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   // 오늘 추천(서버 계산, 화면과 같은 shared/recommend.js) + 지금 보낼 알림
   app.get('/api/plan', async (req, res) => {
     try {
-      const { now: n, rec, live, alarms, mockData, arrived } = await planFor(store.user(req.userId), provider, now());
-      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, source: live?.source ?? null, reason: live?.reason ?? null, reasonText: live?.reasonText ?? '', stale: Boolean(live?.stale), mockData, rec, trips: live?.trips ?? [], alarmsDue: alarms, arrived });
+      const { now: n, rec, live, alarms, mockData, arrived, mode } = await planFor(store.user(req.userId), provider, now(), { subway });
+      res.json({ now: { ...n, hhmm: toHHMM(n.minutes) }, mode, source: live?.source ?? null, reason: live?.reason ?? null, reasonText: live?.reasonText ?? '', stale: Boolean(live?.stale), mockData, rec, trips: live?.trips ?? [], transit: mode === 'transit' ? live : undefined, alarmsDue: alarms, arrived });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -361,15 +406,19 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   // 테스트 전용: FAKE_NOW(ISO 시각)부터 시계가 흐르게 함
   const t0 = Date.now(), base = env.FAKE_NOW ? new Date(env.FAKE_NOW).getTime() : null;
   const now = base ? () => new Date(base + (Date.now() - t0)) : () => new Date();
-  const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label' });
+  // v2.0 환승 경로: ODsay 검색 결과 · 하루 호출 수는 외부 DB(Upstash)에(없으면 메모리)
+  const kv = createKvFromEnv(env, { clock: () => now().getTime() });
+  const odsay = createOdsayService({ env, kv, clock: () => now().getTime() });
+  const subway = createSubwayService({ env, kv, clock: () => now().getTime() });
+  const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label', subway });
   const courses = loadCourses(env.COURSES_FILE || undefined);
   const incidents = createAccidentService({ env, clock: () => now().getTime() });
   const weather = createWeatherService({ env, clock: () => now().getTime() });
   const explainer = createExplainService({ env, clock: () => now().getTime() });
-  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer });
+  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway });
   const port = Number(env.PORT) || 8787;
   const h = provider.health(), ih = incidents.health(), wh = weather.health(), eh = explainer.health(), si = store.info();
-  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
+  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건)` : 'ODSAY_API_KEY 없음 → 직행 안내'}, 실시간 지하철: ${subway.keyConfigured ? '서울시' : '키 없음 → 표준 대기'}, 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
   // Render가 서버를 멈출 때(잠들기 · 재배포) 아직 저장 안 된 기록을 마저 저장
   const bye = () => { scheduler.stop(); store.flush().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };
