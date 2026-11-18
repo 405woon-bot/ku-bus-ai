@@ -24,7 +24,8 @@ export const initialState = () => ({
   log: [],
 });
 
-export function emptyTransit() { return { mode: 'direct', origin: null, route: null, savedAt: null }; }
+// v2.1 retry: 경로를 못 찾아 근처 국민대행 정류장으로 직행 안내 중일 때 다시 찾을 출발지 { origin, reason, at }
+export function emptyTransit() { return { mode: 'direct', origin: null, route: null, savedAt: null, retry: null }; }
 
 let seq = 0;
 const newId = () => `c${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -51,6 +52,8 @@ function reducer(s, a) {
     case 'arrivalSaved': return { ...s, personal: a.personal || emptyPersonal(), arrivals: Array.isArray(a.arrivals) ? a.arrivals : s.arrivals };
     case 'hydrate': return { ...s, ...a.patch };
     case 'resetAll': return initialState();
+    // 미리보기 전용: '처음 화면(출발지 묻기)' 보기 — 정류장 · 환승 경로를 비움(시간표는 그대로)
+    case 'previewFresh': return { ...s, stop: null, transit: emptyTransit(), fired: {} };
     default: return s;
   }
 }

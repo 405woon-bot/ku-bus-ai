@@ -19,7 +19,7 @@ export function useServerSync(state, dispatch, enabled) {
       // 내 걸음 반영 · 도착 기록은 서버가 정답(서버가 배우고 외부 DB에 저장) — 화면은 받아 두기만
       const learned = { personal: me.personal || emptyPersonal(), arrivals: Array.isArray(me.arrivals) ? me.arrivals : [],
         // v2.0 출발 방식 · 고른 환승 경로도 서버(외부 DB) 값이 정답
-        transit: me.transit ? { mode: me.transit.mode === 'transit' ? 'transit' : 'direct', origin: me.transit.origin || null, route: me.transit.route || null, savedAt: me.transit.savedAt || null } : state.transit };
+        transit: me.transit ? { mode: me.transit.mode === 'transit' ? 'transit' : 'direct', origin: me.transit.origin || null, route: me.transit.route || null, savedAt: me.transit.savedAt || null, retry: me.transit.retry || null } : state.transit };
       if (serverEmpty && (state.stop || state.classes.length)) {
         await api.saveTimetable(state.classes);
         await api.saveMe({ stop: state.stop, prefs: state.prefs, walkOverrides: state.walkOverrides });

@@ -63,6 +63,8 @@ export const api = {
   transitSearch: (body) => req('POST', '/api/transit/search', body),
   transitSave: (searchId, pathId) => req('POST', '/api/me/transit', { searchId, pathId }),
   transitMode: (mode) => req('POST', '/api/me/transit', { mode }),
+  // v2.1 경로를 못 찾을 때 근처 국민대행 정류장으로 직행 안내(정류장 · 걷는 시간 · 다시 찾을 출발지)
+  transitFallback: (body) => req('POST', '/api/me/transit', body),
   transitClear: () => req('POST', '/api/me/transit', { clear: true }),
   transitLive: () => req('GET', '/api/transit/live'),
   // 홈 화면 앱으로 설정 이어받기

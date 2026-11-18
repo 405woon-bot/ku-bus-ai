@@ -24,8 +24,8 @@ const Item = ({ label, desc, children }) => (
   </div>
 );
 
-/** 설정 · 돌발정보 줄: 서버 상태(health.incidents)와 마지막 응답(live.incidents)으로 */
-function incidentStatus(mode, inc, h) {
+/** 설정 · 돌발정보 줄: 서버 상태(health.incidents)와 마지막 응답(live.incidents — 환승 경로면 /api/transit/live)으로 */
+function incidentStatus(mode, inc, h, transitOn = false) {
   if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 예시 돌발정보를 보여 줘요(실시간 아님).'];
   if (inc?.source === 'mock') {
     return ['muted', '예시 데이터', `버스 정보가 예시 데이터라 돌발정보도 예시로 보여 줘요(실시간 아님).${h && !h.keyConfigured ? ' 서버에 SEOUL_ACCIDENT_API_KEY도 없어요.' : ''}`];
@@ -36,14 +36,14 @@ function incidentStatus(mode, inc, h) {
   const min = Math.round((h?.cacheSec || 300) / 60);
   if (inc?.source === 'seoul') {
     return inc.stale ? ['warn', `직전 값 · ${inc.items.length}건`, `서울시 연결이 잠시 끊겨 ${Math.max(1, Math.round((inc.ageSec || 0) / 60))}분 전 정보를 보여 줘요.`]
-      : ['ok', `연결됨 · ${inc.items.length}건`, `서울시 돌발정보를 ${min}분마다 받아 경로 주변(300m)과 국민대 근처(1km)만 보여 줘요.`];
+      : ['ok', `연결됨 · ${inc.items.length}건`, transitOn ? `서울시 돌발정보를 ${min}분마다 받아 환승 경로의 버스 구간 주변(300m)과 국민대 근처(1km)만 보여 줘요.` : `서울시 돌발정보를 ${min}분마다 받아 경로 주변(300m)과 국민대 근처(1km)만 보여 줘요.`];
   }
   if (h?.lastError && !h?.lastOkAt) return ['danger', '오류', h.lastError.message];
-  return ['muted', '대기', '탑승 정류장을 고르면 경로 주변 돌발정보를 확인해요.'];
+  return ['muted', '대기', transitOn ? '홈에서 환승 경로 실시간을 받으면 경로 주변 돌발정보를 확인해요.' : '탑승 정류장을 고르면 경로 주변 돌발정보를 확인해요.'];
 }
 
 /** 설정 · 날씨(기상청) 줄: 서버 상태(health.weather)와 마지막 응답(live.weather)으로 */
-function weatherStatus(mode, wx, h) {
+function weatherStatus(mode, wx, h, transitOn = false) {
   const obs = wx?.baseTime && /^\d{4}$/.test(wx.baseTime) ? `${wx.baseTime.slice(0, 2)}:${wx.baseTime.slice(2)}` : '';
   if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 예시 날씨를 보여 줘요(실시간 아님). 비 · 눈일 때만 홈에 나와요.'];
   if (wx?.source === 'mock') {
@@ -58,7 +58,7 @@ function weatherStatus(mode, wx, h) {
       : ['ok', `연결됨 · ${obs} 관측`, `국민대 격자${grid} 실황을 ${Math.round((h?.cacheSec || 600) / 60)}분마다 받아요. 비 · 눈일 때만 홈에 보여 줘요.`];
   }
   if (h?.lastError && !h?.lastOkAt) return ['danger', '오류', h.lastError.message];
-  return ['muted', '대기', '탑승 정류장을 고르면 국민대 날씨를 확인해요.'];
+  return ['muted', '대기', transitOn ? '홈에서 환승 경로 실시간을 받으면 국민대 날씨를 확인해요.' : '탑승 정류장을 고르면 국민대 날씨를 확인해요.'];
 }
 
 /** 설정 · AI 설명(Gemini) 줄: 서버 상태(health.explain)로. 키 · 모델은 서버 환경변수(GEMINI_API_KEY · GEMINI_MODEL) */
@@ -89,10 +89,11 @@ function explainStatus(mode, live, h) {
 function odsayStatus(mode, h) {
   if (mode !== 'api') return ['muted', '미리보기 · 예시', '서버 없는 미리보기라 홍대입구역 예시 경로만 보여 줘요(실제 ODsay 응답 아님).'];
   if (!h) return ['muted', '확인 중', '서버 상태를 불러오는 중이에요.'];
-  if (!h.keyConfigured) return ['muted', '꺼짐', '서버에 ODSAY_API_KEY가 없어 출발지 환승 경로를 찾을 수 없어요(단일 정류장 직행으로 안내).'];
+  if (!h.keyConfigured) return ['muted', '꺼짐', '서버에 ODSAY_API_KEY가 없어 출발지 환승 경로를 찾을 수 없어요(근처 국민대행 정류장이나 고급의 정류장 직행으로 안내).'];
   if (h.lastError?.kind === 'auth') return ['danger', '인증 오류', `ODsay가 키를 받지 않았어요. ODsay에 등록한 서비스 URI(${h.referer || 'https://ku-bus-ai.onrender.com'})와 Render의 ODSAY_API_KEY를 확인해 주세요.`];
-  if (h.cap && h.callsToday >= h.cap) return ['warn', `오늘 ${h.cap}회 다 씀`, '새 출발지 검색은 자정에 다시 열려요. 저장한 경로 · 30일 안에 찾아 둔 출발지는 그대로 써요.'];
-  return ['ok', `준비됨 · 오늘 ${h.callsToday || 0}/${h.cap || 25}회`, `새 경로 검색은 하루 ${h.cap || 25}번까지, 같은 출발지(같은 이름이거나 300m 안)는 30일 동안 저장한 결과를 써요. 저장된 출발지 ${h.cachedOrigins ?? 0}곳.`];
+  if (h.cap && h.callsToday >= h.cap) return ['warn', `오늘 ${h.cap}회 다 씀`, '새 출발지 검색은 자정에 다시 열려요. 저장한 경로 · 찾아 둔 출발지(90일까지)는 그대로 써요.'];
+  const w = h.warm?.enabled ? ` · 주요 환승역 ${h.warm.list}곳${h.warm.ready != null ? ` 중 ${h.warm.ready}곳` : ''}은 ${String(h.warm.hours || '21:00').slice(0, 5)}부터 그날 남은 한도로 미리 찾아 둬요(${h.warm.reserve}회는 남김)` : '';
+  return ['ok', `준비됨 · 오늘 ${h.callsToday || 0}/${h.cap || 25}회`, `새 경로 검색은 하루 ${h.cap || 25}번까지, 같은 출발지(같은 이름이거나 300m 안)는 30일 동안 저장한 결과를 써요. 찾아 둔 출발지 ${h.cachedOrigins ?? 0}곳${w}.`];
 }
 
 /** 설정 · 실시간 지하철 줄: 서버 상태(health.seoulSubway) — 키는 서버 환경변수 SEOUL_SUBWAY_KEY */
@@ -144,7 +145,9 @@ const PERM = { granted: '허용됨', denied: '차단됨 — 브라우저 설정�
 const SYNC = { synced: ['ok', '서버와 동기화됨(synced)'], error: ['danger', '서버 동기화 오류(error)'], loading: ['muted', '연결 중…'] };
 
 /** 실시간 데이터 출처 · 돌발정보 · 날씨 · AI 설명 · 서버 동기화 · 서버 저장소 상태 */
-function ServerGroup({ mode, live, health, sync, transitOn = false }) {
+function ServerGroup({ mode, live: directLive, transitLive = null, health, sync, transitOn = false }) {
+  // v2.1 환승 경로면 /api/transit/live의 돌발정보 · 날씨 · 마지막 국민대행 버스(설명)로 상태를 보여 줌
+  const live = transitOn ? { source: transitLive?.sample ? 'sample' : 'seoul', incidents: transitLive?.incidents, weather: transitLive?.weather, trips: transitLive?.final?.trips || [] } : directLive;
   const src = live?.source ? { source: live.source, reason: live.reason, stale: Boolean(live.stale) || live.status === 'stale' }
     : health?.provider ? { source: health.provider, reason: health.reason } : null;
   const srcDesc = transitOn ? '출발지 환승 경로로 안내 중이라 홈에서 첫 탑승 · 국민대행 버스 실시간을 30초마다 받아요(지하철은 출발 30분 전부터).'
@@ -153,8 +156,8 @@ function ServerGroup({ mode, live, health, sync, transitOn = false }) {
       : src.stale ? '서울시 연결이 잠시 끊겨 직전 값을 쓰는 중이에요.' : '서울시 버스 API에서 20초마다 받아요.';
   const [syncLevel, syncText] = mode === 'api' ? (SYNC[sync] || SYNC.loading) : ['muted', '미리보기 · 서버 없음'];
   const [stLevel, stText, stDesc] = storageStatus(mode, health?.storage);
-  const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents);
-  const [wxLevel, wxText, wxDesc] = weatherStatus(mode, live?.weather, health?.weather);
+  const [incLevel, incText, incDesc] = incidentStatus(mode, live?.incidents, health?.incidents, transitOn);
+  const [wxLevel, wxText, wxDesc] = weatherStatus(mode, live?.weather, health?.weather, transitOn);
   const [aiLevel, aiText, aiDesc] = explainStatus(mode, live, health?.explain);
   const [odLevel, odText, odDesc] = odsayStatus(mode, health?.odsay);
   const [sbLevel, sbText, sbDesc] = subwayStatus(mode, health?.seoulSubway);
@@ -188,31 +191,58 @@ function ServerGroup({ mode, live, health, sync, transitOn = false }) {
   );
 }
 
-export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, health, kcard, onViewCard, onResetPersonal, highlightKCard, onResetAll, now, todayClass, nextClass, walkTable, highlightTransit }) {
+export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, transitLive = null, health, kcard, onViewCard, onResetPersonal, highlightKCard, onResetAll, now, todayClass, nextClass, walkTable, highlightTransit, autoOrigin = null, onOriginDone, onDirectMode }) {
   const { prefs } = state;
-  const transitMode = state.transit?.mode === 'transit';
+  const hasRoute = Boolean(state.transit?.route?.legs?.length);
+  const transitOn = state.transit?.mode === 'transit' && hasRoute;
   const setPrefs = (patch) => dispatch({ type: 'setPrefs', patch });
   const [confirmReset, setConfirmReset] = useState(false);
+  // v2.1 정류장 직행은 '고급'(접힘) — 경로 없이 정류장으로만 안내 중이면 처음부터 펼쳐 둠
+  const [advOpen, setAdvOpen] = useState(!transitOn && Boolean(state.stop));
   return (
     <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-6">
       <h1 className="px-1 text-[22px] font-bold">설정</h1>
 
       {now && state.transit && (
-        <TransitSettings mode={mode} state={state} dispatch={dispatch} now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable || {}} highlight={highlightTransit} />
+        <TransitSettings mode={mode} state={state} dispatch={dispatch} now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable || {}} highlight={highlightTransit}
+          autoOrigin={autoOrigin} onDone={onOriginDone} />
       )}
 
-      <Group title="탑승 정류장" note={transitMode ? '출발지 환승 경로로 안내하는 동안에는 쓰지 않아요(경로를 고르기 전 · 직행 모드에서 써요).' : null}>
-        <button type="button" onClick={onPickStop} className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-surface">
-          <IconStop className="h-5 w-5 shrink-0 text-primary" />
-          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{state.stop?.name || '정류장을 골라 주세요'}</span>
-          <span className="flex shrink-0 items-center text-[13px] font-semibold text-primary">{state.stop ? '바꾸기' : '고르기'}<IconChevron className="h-4 w-4" /></span>
-        </button>
-      </Group>
-
-      <Group title="출발 시각 계산" note={transitMode ? '환승 경로 모드에서는 출발지 → 첫 역 · 정류장 도보를 경로(ODsay)에서 가져와요. 수업 전 도착 여유는 그대로 써요.' : '정류장까지 걷는 시간만큼 버스 탑승 시각보다 일찍 출발하도록 알려 드려요.'}>
-        <Item label="정류장까지 걸어서"><MinuteChips label="정류장까지 걷는 시간" value={prefs.walkToStopMin} options={[3, 5, 10, 15]} onChange={(m) => setPrefs({ walkToStopMin: m })} /></Item>
+      <Group title="출발 시각 계산" note={transitOn ? '출발지 → 첫 역 · 정류장 도보는 경로(ODsay)에서 가져와요.' : null}>
         <Item label="수업 전 도착 여유"><MinuteChips label="수업 시작 전 여유" value={prefs.marginMin} options={[0, 5, 10]} onChange={(m) => setPrefs({ marginMin: m })} /></Item>
       </Group>
+
+      <section aria-label="고급 · 정류장 직행" className="grid grid-cols-1 gap-2" data-testid="advanced" data-open={advOpen ? 'true' : 'false'}>
+        <h2 className="px-1 text-[13px] font-bold text-ink-muted">{advOpen ? '고급 · 정류장 직행' : '고급'}</h2>
+        {!advOpen ? (
+          <button type="button" onClick={() => setAdvOpen(true)} aria-expanded={false} data-testid="advanced-open"
+            className="flex w-full items-center justify-between gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left shadow-card hover:bg-surface">
+            <span className="min-w-0"><span className="block text-[15px] font-semibold">정류장 직행으로 안내</span>
+              <span className="block text-xs text-ink-muted">국민대행 버스를 한 번만 탄다면 정류장만 골라도 돼요{state.stop ? ` · 지금 정류장: ${state.stop.name}` : ''}</span></span>
+            <span className="flex shrink-0 items-center text-[13px] font-semibold text-primary">펼치기<IconChevron className="h-4 w-4" /></span>
+          </button>
+        ) : (
+          <>
+            <div className="divide-y divide-line rounded-2xl border border-line bg-panel shadow-card">
+              <button type="button" onClick={onPickStop} data-testid="stop-row" className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-surface">
+                <IconStop className="h-5 w-5 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1"><span className="block text-[15px] font-semibold">탑승 정류장</span>
+                  <span className="block truncate text-xs text-ink-muted">{state.stop?.name || '정류장을 골라 주세요'}</span></span>
+                <span className="flex shrink-0 items-center text-[13px] font-semibold text-primary">{state.stop ? '바꾸기' : '고르기'}<IconChevron className="h-4 w-4" /></span>
+              </button>
+              <Item label="정류장까지 걸어서"><MinuteChips label="정류장까지 걷는 시간" value={prefs.walkToStopMin} options={[3, 5, 10, 15]} onChange={(m) => setPrefs({ walkToStopMin: m })} /></Item>
+              {hasRoute ? (
+                <Item label="정류장 직행으로 안내" desc={state.stop ? '켜면 환승 경로 대신 이 정류장의 국민대행 버스로 안내해요' : '정류장을 먼저 골라 주세요'}>
+                  <span data-testid="direct-switch"><Switch label="정류장 직행으로 안내" checked={state.transit?.mode === 'direct'} onChange={(v) => { if (state.stop || !v) onDirectMode?.(v); }} /></span>
+                </Item>
+              ) : (
+                <p className="px-4 py-3 text-xs leading-relaxed text-ink-muted">출발지 환승 경로를 고르기 전에는 이 정류장으로 직행 안내해요.</p>
+              )}
+            </div>
+            <button type="button" onClick={() => setAdvOpen(false)} className="justify-self-start px-1 text-xs font-semibold text-ink-muted hover:text-ink">접기</button>
+          </>
+        )}
+      </section>
 
       {kcard && <KCardSettings mode={mode} kcard={kcard} personal={state.personal} arrivals={state.arrivals} onView={onViewCard} onReset={onResetPersonal} highlight={highlightKCard} />}
 
@@ -229,7 +259,7 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
 
       <PushPanel info={info} push={push} onOpenGuide={onOpenGuide} prefsNotify={prefs.notify} />
 
-      <ServerGroup mode={mode} live={live} health={health} sync={sync} transitOn={transitMode && Boolean(state.transit?.route?.legs?.length)} />
+      <ServerGroup mode={mode} live={live} transitLive={transitLive} health={health} sync={sync} transitOn={transitOn} />
 
       <Group title="정보">
         {mode === 'sample' && (

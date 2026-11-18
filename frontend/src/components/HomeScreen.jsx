@@ -3,13 +3,12 @@ import { CONGESTION } from '@shared/stopTrips.js';
 import { reasonText } from '@shared/liveStatus.js';
 import { STATUS } from '@shared/recommend.js';
 import { personalLabel } from '@shared/arrival.js';
-import { hhmm } from '@shared/transitPlan.js';
+import { finalTripOf, hhmm, subwayGap } from '@shared/transitPlan.js';
 import { routeColor } from '../lib/palette.js';
 import { Button, IconAlert, IconBus, IconChevron, IconIdCard, IconPin, IconRoute, IconStop, SampleTag, SourceTag } from './ui.jsx';
 import { ArriveButton, ArrivalPrompt, ArrivedCard } from './Arrival.jsx';
-import { StopSearch } from './StopPicker.jsx';
 import IncidentStrip from './IncidentStrip.jsx';
-import WhyStrip from './WhyStrip.jsx';
+import WhyStrip, { GapStrip } from './WhyStrip.jsx';
 import RouteCard from './RouteCard.jsx';
 
 const TONE = {
@@ -106,6 +105,17 @@ function OriginChip({ origin, onClick }) {
   );
 }
 
+/** v2.1 경로를 못 찾아 가까운 국민대행 정류장으로 직행 안내 중 → 기억해 둔 출발지로 [경로 다시 찾기] */
+function RetryNotice({ retry, onClick }) {
+  return (
+    <section aria-label="환승 경로 다시 찾기" data-testid="retry-notice" className="flex items-center gap-2 rounded-2xl border border-dashed border-primary-line bg-primary-soft px-3.5 py-2 text-[13px] leading-snug text-ink">
+      <IconRoute className="h-4 w-4 shrink-0 text-primary" />
+      <p className="min-w-0 flex-1">환승 경로 대신 <b className="font-semibold">가까운 정류장 직행</b>으로 안내 중이에요{retry?.origin?.name ? <span className="text-ink-muted"> · {retry.origin.name}</span> : null}</p>
+      <Button size="sm" onClick={onClick} data-testid="retry-search">경로 다시 찾기</Button>
+    </section>
+  );
+}
+
 /** 환승 경로 모드인데 아직 경로를 고르지 않음 → 직행으로 안내 중 */
 function TransitPending({ onClick }) {
   return (
@@ -193,24 +203,27 @@ function TransitDepart({ rec, now }) {
  * 오늘 첫 수업 시작 30분 전 ~ 15분 뒤에는 ③ 카드에 [도착했어요!](상태 태그 자리, 상태는 아랫줄로) → 기록하면 수업이 끝날 때까지 '도착 기록' 카드
  * @param {object} p.arrival  useArrival 결과 + cls(오늘 첫 수업)
  */
-export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, arrival, kcardReady, personal, onPickStop, onSelectStop, onGoTimetable, transit = null, onOpenTransit }) {
-  const tOn = Boolean(transit?.on); // 출발지 환승 경로 모드(경로를 고른 뒤) — 아니면 지금까지와 같은 단일 정류장 직행
+export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextClass, hasClasses, arrival, kcardReady, personal, onPickStop, onGoTimetable, transit = null, onOpenTransit, renderFinder = null }) {
+  const tOn = Boolean(transit?.on); // 출발지 환승 경로 모드(경로를 고른 뒤) — 아니면 정류장 직행
   if (!stop && !tOn && syncing) return <div className="mx-auto h-48 w-full max-w-[560px] animate-pulse rounded-3xl bg-line/70" aria-busy="true" aria-label="불러오는 중" />;
   if (!stop && !tOn) {
+    // v2.1 처음 화면: 출발지만 물음(GPS · 역 이름 → 추천 경로 3개). 정류장 직접 고르기는 작은 링크로
+    // 찾는 칸은 이 카드 안에, 추천 경로 카드 · 못 찾을 때 안내는 카드 밖(아래)에(좁은 휴대폰에서도 막대가 한 줄로)
+    const onboarding = (controls) => (
+      <section data-testid="onboarding" className="grid grid-cols-1 gap-4 rounded-3xl border border-line bg-panel px-5 py-6 shadow-card sm:px-6">
+        <div>
+          <h1 className="text-[24px] font-bold leading-snug">어디서 출발하세요?</h1>
+          <p className="mt-1 text-[15px] text-ink-muted">집이나 가까운 역에서 국민대까지 지하철 · 버스 환승 경로를 찾아, 몇 시에 나가면 되는지 알려 드려요.</p>
+        </div>
+        {controls}
+        <p className="text-[13px] text-ink-muted">국민대행 버스를 한 번만 타나요?{' '}
+          <button type="button" onClick={onPickStop} data-testid="pick-stop-link" className="inline-flex items-center font-semibold text-primary hover:underline">정류장 직접 고르기<IconChevron className="h-4 w-4" /></button>
+        </p>
+      </section>
+    );
     return (
       <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-4">
-        <section className="grid grid-cols-1 gap-4 rounded-3xl border border-line bg-panel px-5 py-6 shadow-card sm:px-6">
-          <div>
-            <h1 className="text-[24px] font-bold leading-snug">어느 정류장에서 버스를 타세요?</h1>
-            <p className="mt-1 text-[15px] text-ink-muted">집 주소는 필요 없어요. 매일 타는 정류장 하나만 고르면 출발 시각을 알려 드려요.</p>
-          </div>
-          <StopSearch mode={mode} onSelect={onSelectStop} />
-          {onOpenTransit && (
-            <button type="button" onClick={() => onOpenTransit('transit')} data-testid="open-transit" className="flex items-center gap-1.5 justify-self-start text-[13px] font-semibold text-primary hover:underline">
-              <IconRoute className="h-4 w-4" />환승해서 가요 · 집이나 역에서 출발지 환승 경로로 찾기<IconChevron className="h-4 w-4" />
-            </button>
-          )}
-        </section>
+        {renderFinder ? renderFinder(onboarding) : onboarding(null)}
       </div>
     );
   }
@@ -256,9 +269,17 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
     // 환승 경로: ① 출발 추천(첫 탑승) ③ 강의실 도착(상태 · 도착했어요!) ② 환승 경로 카드(타임라인 · 실시간) — 첫 화면에 출발 · 도착이 함께 보이게
     const p = rec.pick, st = STATUS[rec.status];
     const classLine = `${rec.cls.name} ${rec.cls.start} 시작 · ${rec.cls.building}${rec.cls.room ? ` ${rec.cls.room}` : ''}`;
+    // v2.1 '왜 늦나요?': 직행과 같은 기준 — 계산이 고른 마지막 국민대행 버스가 보통 · 혼잡이면 그 버스의 설명, 아니면 경로 주변 공사 · 비/눈(없으면 안 나옴)
+    //   + 환승에만: 첫 지하철 열차 간격이 배차간격보다 3분 이상 길면 기본 안내 한 줄
+    const rt = transit.live?.rt, ft = finalTripOf(transit.route, rec, rt), gap = subwayGap(transit.route, rec, rt, now.minutes);
+    const strip = ft?.explain && ['normal', 'heavy'].includes(ft.congestion)
+      ? <WhyStrip trip={ft} why={ft.explain} delayMin={ft.delayMin} data={rt?.incidents} weather={rt?.weather} who={`마지막 버스 ${ft.no}번`} />
+      : <IncidentStrip data={rt?.incidents} weather={rt?.weather} congestion={ft?.congestion} />;
     body = (
       <>
         <TransitDepart rec={rec} now={now} />
+        {strip}
+        {gap && <GapStrip gap={gap} />}
         <InfoCard label="강의실 도착 예정" icon={<IconPin className="h-4 w-4 text-primary" />}
           caption={<>강의실 도착{rec.personalMin ? <span data-testid="personal-hint" className="font-normal"> · 내 걸음 {personalLabel(rec.personalMin)}</span> : null}</>}
           tag={canPress ? <ArriveButton onClick={a.press} busy={a.busy} /> : <Signal tone={st.tone}>{st.label}</Signal>}
@@ -329,7 +350,8 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
   return (
     <div className="mx-auto grid w-full max-w-[560px] grid-cols-1 gap-3 short:gap-2.5" data-mode={tOn ? 'transit' : 'direct'}>
       {tOn ? <OriginChip origin={transit.origin} onClick={() => onOpenTransit('transit')} /> : <StopChip stop={stop} onClick={onPickStop} />}
-      {!tOn && transit?.pending && <TransitPending onClick={() => onOpenTransit('transit')} />}
+      {!tOn && transit?.retry && <RetryNotice retry={transit.retry} onClick={() => onOpenTransit('retry')} />}
+      {!tOn && !transit?.retry && transit?.pending && <TransitPending onClick={() => onOpenTransit('transit')} />}
       {!tOn && mock && !arrived && <FallbackNotice reason={live.reason} />}
       {prompt}
       {body}

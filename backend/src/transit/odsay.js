@@ -2,20 +2,24 @@
 //   · 키: encodeURIComponent(ODSAY_API_KEY) — 키에 + · / · = 가 있어도 인증이 깨지지 않게
 //   · 모든 요청에 Referer(ODsay 콘솔 'URI(웹)' 플랫폼에 등록한 주소, 기본 https://ku-bus-ai.onrender.com)
 //   · 무료 한도(하루 30건) 보호: 새 호출은 하루 ODSAY_DAILY_CAP(기본 25)건까지 — 외부 DB의 날짜별 카운터로 세어 서버를 다시 켜도 그대로
-//   · 같은 출발지(이름이 같고 1km 안 · 또는 GPS 300m 안)는 외부 DB에 30일 저장한 결과를 모든 사용자가 같이 씀(호출 안 함)
-//   · 한도 초과 · 키 없음 · 오류는 예외 대신 { ok:false, fallback:'direct' } → 화면이 단일 정류장 직행으로 안내
-import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, parseOdsayResult } from '../../../shared/transitPlan.js';
+//   · 같은 출발지(이름이 같고 1km 안 · 또는 300m 안)는 외부 DB에 저장한 결과를 모든 사용자가 같이 씀(호출 안 함)
+//   · v2.1 저장 기간: 30일 동안은 '새 결과', 90일까지 남겨 두고 한도 초과 · 키 없음 · ODsay 오류 때만 '예전 경로'(날짜 표시)로 씀
+//   · 한도 초과 · 키 없음 · 오류는 예외 대신 { ok:false, fallback:'direct', reason } → 화면이 근처 국민대행 정류장 · 안내로 넘어감
+import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, parseOdsayResult, staleText } from '../../../shared/transitPlan.js';
 import { seoulParts } from '../../../shared/time.js';
 
 const BASE = 'https://api.odsay.com/v1/api/searchPubTransPathT';
 const DAY = 86400;
-const TTL_SEC = 30 * DAY;          // 경로 검색 결과
-const EMPTY_TTL_SEC = 7 * DAY;     // '경로 없음'도 7일 기억(같은 곳에서 다시 호출하지 않게)
+const FRESH_SEC = 30 * DAY;        // 경로 검색 결과: 이 기간은 '새 결과'로 바로 씀
+const KEEP_SEC = 90 * DAY;         // v2.1 그 뒤 90일까지는 지우지 않고, 새로 찾을 수 없을 때만 '예전 경로'로
+const EMPTY_TTL_SEC = 7 * DAY;     // '경로 없음'도 7일 기억(같은 곳에서 다시 호출하지 않게) — 예전 값으로는 쓰지 않음
 const IDX = 'kubusai:odsay:idx';
 const RES = (k) => `kubusai:odsay:r:${k}`;
 const CNT = (d) => `kubusai:odsay:calls:${d}`;
 export const nameKey = (s) => String(s || '').replace(/\s+/g, '').replace(/역$/, '').toLowerCase().slice(0, 40);
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
+/** 예전 경로를 쓸 수 있는 실패 이유(새로 찾을 수 없음). '경로 없음' · '700m 안'은 ODsay의 새 답이 맞으므로 쓰지 않음 */
+const STALE_OK = new Set(['cap', 'no-key', 'error', 'store', 'auth']);
 
 /** ODsay 오류 코드 → 이유 */
 export function odsayReason(err) {
@@ -26,12 +30,16 @@ export function odsayReason(err) {
   if (code === '6') return 'out-of-area';
   return 'error';
 }
-/** 응답 모양(이름만, 값 없음) — 실제 응답 필드 확인용(/api/health) */
+/** 응답 모양(이름만, 값 없음) — 실제 응답 필드 확인용(/api/health). v2.1: 경유 정류장(passStopList.stations) 필드 이름도 */
 function shapeOf(json) {
   const p = json?.result?.path?.[0];
-  const subKeys = new Set(), laneKeys = new Set();
-  for (const s of p?.subPath || []) { Object.keys(s || {}).forEach((k) => subKeys.add(k)); for (const l of s?.lane || []) Object.keys(l || {}).forEach((k) => laneKeys.add(k)); }
-  return { top: Object.keys(json || {}), path: Object.keys(p || {}), info: Object.keys(p?.info || {}), subPath: [...subKeys].sort(), lane: [...laneKeys].sort() };
+  const subKeys = new Set(), laneKeys = new Set(), stKeys = new Set();
+  for (const s of p?.subPath || []) {
+    Object.keys(s || {}).forEach((k) => subKeys.add(k));
+    for (const l of s?.lane || []) Object.keys(l || {}).forEach((k) => laneKeys.add(k));
+    for (const st of (s?.passStopList?.stations || []).slice(0, 3)) Object.keys(st || {}).forEach((k) => stKeys.add(k));
+  }
+  return { top: Object.keys(json || {}), path: Object.keys(p || {}), info: Object.keys(p?.info || {}), subPath: [...subKeys].sort(), lane: [...laneKeys].sort(), station: [...stKeys].sort() };
 }
 
 /**
@@ -42,36 +50,57 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
   const referer = String(env.ODSAY_REFERER || '').trim() || 'https://ku-bus-ai.onrender.com';
   const cap = Math.max(0, Math.min(30, Number(env.ODSAY_DAILY_CAP) || 25));
   const today = () => seoulParts(new Date(clock())).dateKey;
-  const state = { date: today(), calls: 0, hits: 0, lastOkAt: null, lastError: null, lastFallback: null, lastShape: null, index: null, indexAt: 0 };
+  const state = { date: today(), calls: 0, hits: 0, staleServed: 0, lastOkAt: null, lastError: null, lastFallback: null, lastShape: null, index: null, indexAt: 0 };
   const redact = (s) => (key ? String(s ?? '').split(key).join('[KEY]').split(encodeURIComponent(key)).join('[KEY]') : String(s ?? ''));
   const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
   const noteErr = (kind, message, code = null) => { state.lastError = { kind, code, message: redact(message).slice(0, 200), at: clock() }; };
   // 서버를 켤 때 오늘 호출 수를 외부 DB에서 읽어 둠(health 표시용)
   kv.getNum(CNT(state.date)).then((n) => { if (state.date === today()) state.calls = Math.max(state.calls, n); }, () => {});
 
+  /** 저장된 출발지 목록: 보관이 끝난 것만 지움. fresh(새 결과로 쓰는 기한)가 없는 예전(v2.0) 항목은 exp(30일)가 곧 fresh */
   async function loadIndex() {
     if (state.index && clock() - state.indexAt < 30_000) return state.index;
     const raw = await kv.hgetall(IDX), idx = {}, gone = [];
     for (const [k, v] of Object.entries(raw)) {
-      try { const e = JSON.parse(v); if (e.exp > clock()) idx[k] = e; else gone.push(k); } catch { gone.push(k); }
+      try { const e = JSON.parse(v); if (e.exp > clock()) idx[k] = { ...e, fresh: e.fresh ?? e.exp, legacy: !e.fresh }; else gone.push(k); } catch { gone.push(k); }
     }
     for (const k of gone) kv.hdel(IDX, k).catch(() => {});
     state.index = idx; state.indexAt = clock();
     return idx;
   }
-  /** 같은 출발지: 이름이 같고 1km 안 · 또는 300m 안(가장 가까운 것) */
+  /** 같은 출발지(이름이 같고 1km 안 · 또는 300m 안) 중 가장 가까운 것 — 새 결과가 있으면 그것을, 없으면 예전 결과 */
   async function findCached(o) {
-    const idx = await loadIndex(), here = { x: o.lon, y: o.lat };
-    let best = null, bestD = Infinity;
-    for (const [k, e] of Object.entries(idx)) {
-      const d = distanceM(here, { x: e.lon, y: e.lat });
-      const sameName = o.kind !== 'gps' && o.name && e.name && nameKey(o.name) === nameKey(e.name) && d <= 1000;
-      if ((sameName || d <= TRANSIT.cacheRadiusM) && (sameName ? -1 : d) < bestD) { best = k; bestD = sameName ? -1 : d; }
+    const idx = await loadIndex(), here = { x: o.lon, y: o.lat }, t = clock();
+    const pick = (fresh) => {
+      let best = null, bestD = Infinity;
+      for (const [k, e] of Object.entries(idx)) {
+        if ((e.fresh > t) !== fresh) continue;
+        const d = distanceM(here, { x: e.lon, y: e.lat });
+        const sameName = o.kind !== 'gps' && o.name && e.name && nameKey(o.name) === nameKey(e.name) && d <= 1000;
+        if ((sameName || d <= TRANSIT.cacheRadiusM) && (sameName ? -1 : d) < bestD) { best = k; bestD = sameName ? -1 : d; }
+      }
+      return best;
+    };
+    for (const fresh of [true, false]) {
+      const k = pick(fresh);
+      if (!k) continue;
+      const v = await byId(k);
+      if (!v) { delete idx[k]; kv.hdel(IDX, k).catch(() => {}); continue; }
+      if (!fresh && !v.paths?.length) continue; // '경로 없음'은 예전 값으로 쓰지 않음
+      if (fresh && idx[k].legacy && v.paths?.length) keepLonger(k, v, idx[k]); // v2.0에 저장한 결과도 90일까지 남김
+      const ageDays = Math.max(0, Math.floor((t - (Date.parse(v.at) || t)) / (DAY * 1000)));
+      return { v, stale: !fresh, ageDays };
     }
-    if (!best) return null;
-    const v = await byId(best);
-    if (!v) { delete idx[best]; kv.hdel(IDX, best).catch(() => {}); return null; }
-    return v;
+    return null;
+  }
+  /** v2.0(30일만 보관)으로 저장된 결과를 처음 다시 쓸 때: 찾은 날 + 90일까지 남기도록 보관 기간을 늘림 */
+  function keepLonger(k, v, e) {
+    const at = Date.parse(v.at) || clock();
+    const exp = at + KEEP_SEC * 1000, ttl = Math.ceil((exp - clock()) / 1000);
+    if (ttl <= 0) return;
+    const next = { lat: e.lat, lon: e.lon, name: e.name, exp, fresh: e.fresh };
+    e.exp = exp; e.legacy = false;
+    kv.expire(RES(k), ttl).then(() => kv.hset(IDX, k, JSON.stringify(next))).catch(() => {});
   }
   async function byId(id) {
     if (typeof id !== 'string' || id.length < 3 || id.length > 120 || !/^[ng]:/.test(id) || /[\s\u0000-\u001f]/.test(id)) return null;
@@ -79,11 +108,12 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
     if (!raw) return null;
     try { return { key: id, ...JSON.parse(raw) }; } catch { return null; }
   }
-  async function save(entry, ttlSec) {
-    const exp = clock() + ttlSec * 1000;
-    await kv.set(RES(entry.key), JSON.stringify({ origin: entry.origin, paths: entry.paths, reason: entry.reason || null, at: entry.at }), ttlSec);
-    await kv.hset(IDX, entry.key, JSON.stringify({ lat: entry.origin.lat, lon: entry.origin.lon, name: entry.origin.name, exp }));
-    if (state.index) state.index[entry.key] = { lat: entry.origin.lat, lon: entry.origin.lon, name: entry.origin.name, exp };
+  async function save(entry, freshSec, keepSec = freshSec) {
+    const t = clock(), exp = t + keepSec * 1000, fresh = t + freshSec * 1000;
+    const ix = { lat: entry.origin.lat, lon: entry.origin.lon, name: entry.origin.name, exp, fresh };
+    await kv.set(RES(entry.key), JSON.stringify({ origin: entry.origin, paths: entry.paths, reason: entry.reason || null, at: entry.at }), keepSec);
+    await kv.hset(IDX, entry.key, JSON.stringify(ix));
+    if (state.index) state.index[entry.key] = { ...ix, legacy: false };
   }
   function calls() {
     if (state.date !== today()) { state.date = today(); state.calls = 0; }
@@ -106,7 +136,7 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
   /**
    * 출발지 → 국민대 추천 경로(최대 3개)
    * @param {{ lat, lon, name?, kind?: 'gps'|'stop', arsId? }} q
-   * @returns {Promise<{ ok, cached?, searchId?, origin?, paths?, at?, calls, fallback?, reason?, message? }>}
+   * @returns {Promise<{ ok, cached?, stale?, ageDays?, staleReason?, searchId?, origin?, paths?, at?, calls, fallback?, reason?, message? }>}
    */
   async function search({ lat, lon, name = '', kind = 'stop', arsId = '' } = {}) {
     const fb = (reason, extra = {}) => {
@@ -117,21 +147,30 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
     const origin = { name: String(name || '').trim().slice(0, 40) || (kind === 'gps' ? 'GPS로 고른 위치' : '출발지'), lat: r6(Number(lat)), lon: r6(Number(lon)), kind: kind === 'gps' ? 'gps' : 'stop', arsId: /^\d{5}$/.test(String(arsId)) ? String(arsId) : '' };
     const distM = Math.round(distanceM({ x: origin.lon, y: origin.lat }, KOOKMIN_GATE));
     if (distM < TRANSIT.nearMinM) return fb('near', { distM });
+    const nameOf = (hit) => (origin.kind === 'gps' ? hit.origin.name : origin.name);
+    let old = null; // 예전 경로(30~90일): 새로 찾을 수 없을 때만
     try {
       const hit = await findCached(origin);
-      if (hit) {
+      if (hit && !hit.stale) {
         state.hits++;
-        if (!hit.paths?.length) return fb(hit.reason || 'no-path', { cached: true });
-        return { ok: true, cached: true, searchId: hit.key, origin: { ...hit.origin, name: origin.kind === 'gps' ? hit.origin.name : origin.name }, paths: hit.paths, at: hit.at, calls: calls() };
+        if (!hit.v.paths?.length) return fb(hit.v.reason || 'no-path', { cached: true });
+        return { ok: true, cached: true, searchId: hit.v.key, origin: { ...hit.v.origin, name: nameOf(hit.v) }, paths: hit.v.paths, at: hit.v.at, calls: calls() };
       }
+      if (hit?.stale) old = hit;
     } catch (e) { noteErr('store', `저장된 검색 결과를 읽지 못했어요: ${e.message}`); }
-    if (!key) return fb('no-key');
+    const useOld = (reason, extra = {}) => {
+      if (!old || !STALE_OK.has(reason)) return fb(reason, extra);
+      state.staleServed++; state.lastFallback = { reason, at: clock(), stale: true };
+      return { ok: true, cached: true, stale: true, staleReason: reason, ageDays: old.ageDays, message: staleText(reason, old.ageDays, cap),
+        searchId: old.v.key, origin: { ...old.v.origin, name: nameOf(old.v) }, paths: old.v.paths, at: old.v.at, calls: calls() };
+    };
+    if (!key) return useOld('no-key');
     let n;
-    try { n = await kv.incr(CNT(today()), 2 * DAY); } catch (e) { noteErr('store', e.message); return fb('store'); }
+    try { n = await kv.incr(CNT(today()), 2 * DAY); } catch (e) { noteErr('store', e.message); return useOld('store'); }
     state.date = today(); state.calls = Math.max(state.calls, n);
-    if (n > cap) return fb('cap');
+    if (n > cap) return useOld('cap');
     let json;
-    try { json = await request(origin); } catch (e) { noteErr('error', e.message); log.warn?.(`[odsay] ${redact(e.message)}`); return fb('error'); }
+    try { json = await request(origin); } catch (e) { noteErr('error', e.message); log.warn?.(`[odsay] ${redact(e.message)}`); return useOld('error'); }
     state.lastShape = shapeOf(json);
     const r = parseOdsayResult(json);
     const entryKey = origin.kind === 'gps' ? `g:${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}` : `n:${nameKey(origin.name)}:${origin.lat.toFixed(3)},${origin.lon.toFixed(3)}`;
@@ -140,22 +179,42 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
       const reason = r.error.code === 'format' ? 'error' : odsayReason(r.error);
       noteErr(reason, r.error.message, r.error.code);
       if (['no-path', 'near', 'out-of-area'].includes(reason)) save({ key: entryKey, origin, paths: [], reason, at }, EMPTY_TTL_SEC).catch(() => {});
-      return fb(reason, { code: r.error.code });
+      return useOld(reason, { code: r.error.code });
     }
     state.lastOkAt = clock();
-    try { await save({ key: entryKey, origin, paths: r.paths, at }, TTL_SEC); } catch (e) { noteErr('store', `검색 결과를 저장하지 못했어요: ${e.message}`); }
+    try { await save({ key: entryKey, origin, paths: r.paths, at }, FRESH_SEC, KEEP_SEC); } catch (e) { noteErr('store', `검색 결과를 저장하지 못했어요: ${e.message}`); }
     return { ok: true, cached: false, searchId: entryKey, origin, paths: r.paths, at, calls: calls() };
+  }
+
+  /** v2.1 미리 찾아 두기용: 이 이름(같은 이름 키)으로 저장된 '새 결과'가 언제까지 새것인지(ms, 없으면 0) · 경로 없음으로 기억했는지 */
+  async function freshness(name) {
+    const idx = await loadIndex(), k = nameKey(name);
+    let until = 0, empty = false;
+    for (const [id, e] of Object.entries(idx)) {
+      if (!id.startsWith('n:') || nameKey(e.name) !== k || e.fresh <= clock()) continue;
+      if (e.fresh > until) { until = e.fresh; empty = !e.legacy && e.exp === e.fresh; } // '경로 없음'은 새 기한 = 보관 기한(7일)
+    }
+    return { until, empty };
+  }
+  /** 오늘 쓴 새 호출 수(외부 DB 카운터 그대로 — 서버가 여럿이거나 다시 켜져도 정확) */
+  async function usedToday() {
+    const n = await kv.getNum(CNT(today()));
+    if (state.date === today()) state.calls = Math.max(state.calls, n);
+    return Math.min(n, cap);
   }
 
   return {
     keyConfigured: Boolean(key),
+    cap,
     search,
     byId,
+    freshness,
+    usedToday,
     health() {
       const c = calls();
       return {
         keyConfigured: Boolean(key), referer, cap, callsToday: c.today, left: c.left, date: state.date, store: kv.kind,
-        cachedOrigins: state.index ? Object.keys(state.index).length : null, cacheHits: state.hits,
+        cachedOrigins: state.index ? Object.keys(state.index).length : null, cacheHits: state.hits, staleServed: state.staleServed, freshDays: FRESH_SEC / DAY, keepDays: KEEP_SEC / DAY,
         lastOkAt: iso(state.lastOkAt), lastError: state.lastError && { ...state.lastError, at: iso(state.lastError.at) },
         lastFallback: state.lastFallback && { ...state.lastFallback, at: iso(state.lastFallback.at) }, lastShape: state.lastShape,
       };

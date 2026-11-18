@@ -20,12 +20,13 @@ function shift(live, sec) {
  *   sample: 예시 응답(실시간 아님)
  * @returns {{ status:'idle'|'loading'|'ok'|'error', rt, fetchedAt?, sample?, error? }}  rt는 지금 기준으로 맞춘 도착 예정
  */
-export function useTransitLive({ mode, route, now, cls, walkTable, marginMin, personalOffsetMin }) {
+export function useTransitLive({ mode, route, now, cls, walkTable, marginMin, personalOffsetMin, preview = null }) {
   const key = route ? route.title + route.legs.length : '';
   const bucket = Math.floor(now.minutes * 12); // 시계 5초마다(미리보기 '시각 이동'도 바로 반영)
-  const sample = useMemo(() => (mode === 'sample' && route ? sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin }) : null),
+  const pv = preview || {};
+  const sample = useMemo(() => (mode === 'sample' && route ? sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin, preview: pv }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, key, bucket, cls?.id, marginMin, personalOffsetMin]);
+    [mode, key, bucket, cls?.id, marginMin, personalOffsetMin, pv.incidents, pv.weather, pv.explain]);
   const [live, setLive] = useState({ status: 'idle', rt: null });
   useEffect(() => {
     if (mode !== 'api' || !route) { setLive({ status: 'idle', rt: null }); return undefined; }

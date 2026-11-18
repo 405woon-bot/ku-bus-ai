@@ -17,7 +17,7 @@ export const PREVIEW_INCIDENTS = { all: '공사+행사', campus: '행사만', no
 /** 미리보기에서 고르는 예시 날씨 */
 export const PREVIEW_WEATHER = { rain: '비', snow: '눈', clear: '맑음' };
 /** 미리보기에서 고르는 '왜 늦나요?' 모양(예시 문장 · 실제 AI 응답 아님) */
-export const PREVIEW_EXPLAIN = { ai: 'AI 문장', rule: '기본 안내' };
+export const PREVIEW_EXPLAIN = { ai: 'AI 문장', rule: '기본 안내', gap: '+지하철 간격' }; // gap: 환승 경로의 첫 지하철이 늦게 오는 예시(직행은 AI 문장과 같음)
 /** 미리보기에서 고르는 가상 기기(아이폰 홈 화면 추가 안내 · 백그라운드 알림 화면 확인용) */
 export const PREVIEW_DEVICES = { pc: 'PC', safari: '아이폰 Safari', app: '아이폰 앱', inapp: '카카오톡' };
 

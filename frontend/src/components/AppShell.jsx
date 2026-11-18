@@ -111,6 +111,9 @@ export function PreviewBar({ preview, dispatch, nowMin = null }) {
               className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.explain || 'ai') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
           ))}
         </span>
+        {/* v2.1 처음 화면(출발지 묻기) 보기 — 정류장 · 환승 경로를 비움(시간표는 그대로) */}
+        <button type="button" data-testid="preview-fresh" onClick={() => dispatch({ type: 'previewFresh' })}
+          className="h-7 whitespace-nowrap rounded-md border border-line bg-panel px-2 text-[12px] font-semibold text-ink hover:border-ink-muted">처음 화면</button>
         {/* '도착했어요!' 버튼 시간(수업 시작 30분 전 ~ 15분 뒤)으로 시계 옮기기 — 같은 날이라 도착 기록은 그대로 */}
         <label className="flex w-full items-center gap-1 md:w-auto">
           <span className="whitespace-nowrap font-semibold text-ink">시각 이동</span>

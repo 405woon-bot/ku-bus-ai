@@ -219,28 +219,42 @@ with sync_playwright() as p:
         check(f'[{label}] 이미지 삭제 → 아직 등록하지 않았어요', flat(pg.get_by_test_id('kcard-status').inner_text()) == '아직 등록하지 않았어요' and ks.locator('img').count() == 0)
         ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
         check(f'[{label}] 도착 · K•CARD+ 화면 가로 넘침 없음', ov <= 0, str(ov))
-        # ── v2.0 출발지 환승 경로(미리보기: ODsay · 서울시 실시간 지하철 형식의 예시 응답 · 실제 경로 아님) ──
+        # ── v2.0 · v2.1 출발지 환승 경로(미리보기: ODsay · 서울시 실시간 지하철 형식의 예시 응답 · 실제 경로 아님) ──
         pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
         pg.get_by_role('button', name='처음부터').click(); pg.wait_for_timeout(300)
         pg.evaluate("location.hash = '#settings'"); pg.wait_for_timeout(300)
+        ts = pg.get_by_test_id('transit-settings'); adv = pg.get_by_test_id('advanced')
+        check(f'[{label}] v2.1 설정: 출발 방식 고르기 없음 · 맨 위 출발지(GPS · 역 이름) · 정류장은 고급(직행 중이라 펼침)', ts.get_attribute('data-mode') == 'direct' and ts.get_by_role('radio').count() == 0
+              and pg.get_by_test_id('transit-gps').count() == 1 and pg.locator('[data-testid="transit-origin"] input[type="search"]').count() == 1
+              and adv.get_attribute('data-open') == 'true' and '고려대사범대학부속고등학교' in flat(pg.get_by_test_id('stop-row').inner_text()))
+        # 처음 화면: 출발지만 물음
+        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
+        pg.get_by_test_id('preview-fresh').click(); pg.wait_for_timeout(400)
+        onb = pg.get_by_test_id('onboarding')
+        check(f'[{label}] v2.1 처음 화면: 어디서 출발하세요? · GPS · 역 이름 · 정류장 직접 고르기 링크', onb.count() == 1 and '어디서 출발하세요?' in onb.inner_text() and onb.get_by_test_id('transit-gps').count() == 1
+              and onb.locator('input[type="search"]').count() == 1 and onb.get_by_test_id('pick-stop-link').count() == 1 and pg.locator('button[aria-label^="탑승 정류장"]').count() == 0)
+        sel = onb.locator('select[aria-label="미리보기 검색 결과"]')
+        sel.select_option('none'); onb.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(400)
+        fbk = pg.get_by_test_id('transit-fallback'); ftx = flat(fbk.inner_text()) if fbk.count() else ''
+        check(f'[{label}] 한도 초과 · 근처 없음: 내일부터 · 직행 약속 없음 · 400m 안 정류장 없음 · 큰 환승역으로 찾기', fbk.get_attribute('data-reason') == 'cap' and '내일부터 찾을 수 있어요' in ftx and '직행' not in ftx and '25/25회' in ftx
+              and pg.get_by_test_id('nearby-none').count() == 1 and pg.get_by_test_id('bigstation-tip').count() == 1 and pg.get_by_test_id('onboarding').count() == 1, ftx[:140])
+        sel.select_option('stale'); onb.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(400)
+        resl = pg.get_by_test_id('transit-results')
+        check(f'[{label}] 한도 초과 · 예전 경로: 41일 전에 찾은 경로 표시 · 실시간 다시 계산 안내 · 경로 3개', resl.get_attribute('data-stale') == 'true' and flat(pg.get_by_test_id('stale-tag').inner_text()) == '41일 전에 찾은 경로'
+              and '41일 전에 찾아 둔 경로를 보여 드려요' in flat(pg.get_by_test_id('stale-notice').inner_text()) and pg.get_by_test_id('route-option').count() == 3)
+        sel.select_option('nearby'); onb.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(700)
+        check(f'[{label}] 한도 초과 · 근처 국민대행 정류장 → 자동으로 직행 안내(홈 = 정류장 칩 · 실시간 버스) + 경로 다시 찾기', pg.get_by_test_id('onboarding').count() == 0
+              and pg.locator('button[aria-label^="탑승 정류장 고려대사범대학부속고등학교"]').count() == 1 and pg.get_by_test_id('retry-notice').count() == 1
+              and pg.locator('section[aria-label="실시간 버스 도착"]').count() == 1)
+        if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_retry_home.png')
+        pg.get_by_test_id('retry-search').click(); pg.wait_for_timeout(700)
         ts = pg.get_by_test_id('transit-settings')
-        check(f'[{label}] 환승: 출발 방식 기본값 = 단일 정류장 직행(v1.0 그대로)', ts.get_attribute('data-mode') == 'direct' and ts.get_by_role('radio', name='단일 정류장 직행').get_attribute('aria-checked') == 'true')
-        ts.get_by_role('radio', name='출발지 환승 경로').click(); pg.wait_for_timeout(300)
-        check(f'[{label}] 환승 모드: 경로 고르기 전 안내 · GPS 버튼 · 역/정류장 검색', ts.get_attribute('data-mode') == 'transit' and '아직 경로를 고르지 않아' in flat(ts.inner_text())
-              and pg.get_by_test_id('transit-gps').count() == 1 and pg.locator('[data-testid="transit-origin"] input[type="search"]').count() == 1)
-        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(400)
-        check(f'[{label}] 환승(경로 없음): 홈은 직행 그대로 + [경로 고르기] 안내', pg.get_by_test_id('transit-pending').count() == 1 and pg.locator('section[aria-label="실시간 버스 도착"]').count() == 1
-              and pg.get_by_test_id('origin-chip').count() == 0)
-        pg.get_by_test_id('transit-pending').get_by_role('button', name='경로 고르기').click(); pg.wait_for_timeout(500)
-        ts = pg.get_by_test_id('transit-settings')
-        check(f'[{label}] [경로 고르기] → 설정 · 출발 방식 칸 강조', pg.evaluate('location.hash') == '#settings' and 'border-primary' in (ts.get_attribute('class') or ''))
-        pg.get_by_text('오늘 검색 한도(25회) 초과').click(); pg.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(400)
-        fbk = pg.get_by_test_id('transit-fallback')
-        check(f'[{label}] 한도 초과(예시) → 오류 대신 직행 안내 · 오늘 25/25회', fbk.count() == 1 and fbk.get_attribute('data-reason') == 'cap' and '직행' in flat(fbk.inner_text()) and '25/25회' in flat(fbk.inner_text()), flat(fbk.inner_text())[:120] if fbk.count() else '')
-        pg.get_by_text('오늘 검색 한도(25회) 초과').click()
+        check(f'[{label}] [경로 다시 찾기] → 설정 · 출발지 칸 강조 · 기억해 둔 출발지로 바로 다시 찾음', pg.evaluate('location.hash') == '#settings' and 'border-primary' in (ts.get_attribute('class') or '')
+              and pg.get_by_test_id('route-option').count() == 3 and pg.get_by_test_id('transit-fallback-note').count() == 1)
         oi = pg.locator('[data-testid="transit-origin"] input[type="search"]'); oi.fill('청덕'); pg.wait_for_timeout(250)
         pg.get_by_role('button', name=re.compile('청덕초등학교입구')).first.click(); pg.wait_for_timeout(400)
-        check(f'[{label}] 국민대 700m 안 출발지 → 직행 안내', fbk.count() == 1 and fbk.get_attribute('data-reason') == 'near', flat(fbk.inner_text())[:120] if fbk.count() else '')
+        fbk = pg.get_by_test_id('transit-fallback')
+        check(f'[{label}] 국민대 700m 안 출발지 → 걸어가는 편이 빨라요(근처 정류장 안내 없음)', fbk.get_attribute('data-reason') == 'near' and '걸어가는 편이 빨라요' in flat(fbk.inner_text()) and pg.get_by_test_id('nearby-stops').count() == 0, flat(fbk.inner_text())[:120] if fbk.count() else '')
         oi.fill('')
         pg.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(500)
         opts = pg.get_by_test_id('route-option')
@@ -265,6 +279,7 @@ with sync_playwright() as p:
         stx2 = flat(pg.get_by_test_id('odsay-status').inner_text()); sbx = flat(pg.get_by_test_id('subway-status').inner_text())
         check(f'[{label}] 설정: 환승 경로(ODsay) · 실시간 지하철 상태(미리보기 · 예시)', stx2 == '미리보기 · 예시' and sbx == '미리보기 · 예시', f'{stx2} / {sbx}')
         pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
+        check(f'[{label}] 경로를 고르면 경로 다시 찾기 줄은 사라짐', pg.get_by_test_id('retry-notice').count() == 0)
         jump(7 * 60 + 30)
         dep = pg.locator('section[aria-label="출발 추천"]')
         txt = flat(pg.locator('main').inner_text())
@@ -272,14 +287,28 @@ with sync_playwright() as p:
               and flat(pg.get_by_test_id('first-badge').inner_text()) == '2호선' and pg.locator('section[aria-label="강의실 도착 예정"]').count() == 1
               and '내 경로' in pg.get_by_test_id('transit-route').inner_text() and '예시 데이터 · 실시간 아님' in flat(pg.get_by_test_id('data-line').inner_text()), txt[:200])
         order = pg.evaluate("() => [...document.querySelectorAll('main section[aria-label]')].map(s => s.getAttribute('aria-label'))")
-        check(f'[{label}] 환승 홈 순서: 출발 추천 → 강의실 도착 → 환승 경로 · 직행 버스 카드 없음', order[:3] == ['출발 추천', '강의실 도착 예정', '환승 경로 2호선 → 4호선 → 1213'] and '실시간 버스 도착' not in order, str(order))
+        check(f'[{label}] 환승 홈 순서: 출발 추천 → 왜 늦나요?(마지막 버스) → 강의실 도착 → 환승 경로 · 직행 버스 카드 없음', order[:4] == ['출발 추천', '왜 늦나요?', '강의실 도착 예정', '환승 경로 2호선 → 4호선 → 1213'] and '실시간 버스 도착' not in order, str(order))
+        why = pg.get_by_test_id('why-strip'); wtx = flat(why.inner_text()) if why.count() else ''
+        check(f'[{label}] v2.1 환승 왜 늦나요?: 마지막 버스 1213번 · 노란 줄 · AI + 예시 · +N분 · 근거', why.count() == 1 and flat(pg.get_by_test_id('why-who').inner_text()) == '마지막 버스 1213번' and why.get_attribute('data-tone') == 'caution'
+              and why.get_attribute('data-why') == 'ai' and re.search(r'\+\d+분', wtx) is not None and '근거' in wtx, wtx[:160])
+        why.get_by_role('button').first.click(); pg.wait_for_timeout(200)
+        calc = flat(pg.get_by_test_id('why-fact-calc').inner_text()) if pg.get_by_test_id('why-fact-calc').count() else ''
+        check(f'[{label}] 근거 펼침: 1213번 길음역 → 국민대학교앞 구간 · 날씨 · 돌발정보(예시)', '1213번' in calc and '길음역' in calc and pg.get_by_test_id('why-fact-weather').count() == 1 and pg.get_by_test_id('why-fact-incidents').count() == 1, calc[:120])
+        why.get_by_role('button').first.click(); pg.wait_for_timeout(200)
         if label == 'iphone13':
             bar = pg.locator('div.border-b.border-dashed.bg-surface').first.bounding_box(); tb = pg.locator('nav.fixed').bounding_box()
             bb = pg.locator('section[aria-label="강의실 도착 예정"]').bounding_box()
-            check(f'[{label}] 환승 홈: 출발 · 도착 카드가 첫 화면(미리보기 띠 제외)', bb['y'] + bb['height'] - bar['height'] <= tb['y'], f"bottom={bb['y'] + bb['height'] - bar['height']:.0f} tab={tb['y']:.0f}")
+            check(f'[{label}] 환승 홈: 출발 · 왜 늦나요 · 도착 카드가 첫 화면(미리보기 띠 제외)', bb['y'] + bb['height'] - bar['height'] <= tb['y'], f"bottom={bb['y'] + bb['height'] - bar['height']:.0f} tab={tb['y']:.0f}")
             pg.screenshot(path=OUT + f'preview_{label}_transit_home.png')
         row = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="subway"]').first.inner_text())
         check(f'[{label}] 07:30(출발 30분 전 안): 2호선은 예시 실시간 열차로 · 탑승 시각', '탑승' in row and ('예시' in row or '배차 간격 예상' in row), row)
+        check(f'[{label}] 첫 지하철 간격이 평소와 같으면 지하철 줄 없음', pg.get_by_test_id('gap-strip').count() == 0)
+        pg.get_by_role('button', name='+지하철 간격', exact=True).click(); pg.wait_for_timeout(500)
+        gtx = flat(pg.get_by_test_id('gap-strip').inner_text()) if pg.get_by_test_id('gap-strip').count() else ''
+        check(f'[{label}] v2.1 첫 지하철 간격(예시): 기본 안내 · 홍대입구역 2호선 열차 간격이 평소보다 길어요 · +4분 · 예시', '첫 지하철 2호선' in gtx and '기본 안내' in gtx and '홍대입구역 2호선 열차 간격이 평소보다 길어요.' in gtx
+              and flat(pg.get_by_test_id('gap-plus').inner_text()) == '+4분' and '예시 데이터 · 실시간 아님' in gtx, gtx[:160])
+        if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_transit_gap.png')
+        pg.get_by_role('button', name='AI 문장', exact=True).click(); pg.wait_for_timeout(300)
         jump(7 * 60 + 5)
         row = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="subway"]').first.inner_text())
         check(f'[{label}] 07:05(실시간 전): 2호선은 배차간격으로 예상', ' 예상 ' in f' {row} ' and '예시' not in row and '배차 간격' not in row, row)
@@ -292,10 +321,17 @@ with sync_playwright() as p:
             if x.count(): x.first.click(); pg.wait_for_timeout(120)
         pg.get_by_test_id('origin-chip').click(); pg.wait_for_timeout(500)
         check(f'[{label}] 출발지 칩 [바꾸기] → 설정 · 출발지 찾기 열림', pg.evaluate('location.hash') == '#settings' and pg.get_by_test_id('transit-origin').count() == 1)
-        pg.get_by_test_id('transit-settings').get_by_role('radio', name='단일 정류장 직행').click(); pg.wait_for_timeout(300)
+        adv = pg.get_by_test_id('advanced')
+        if adv.get_attribute('data-open') != 'true': pg.get_by_test_id('advanced-open').click(); pg.wait_for_timeout(200)
+        pg.get_by_test_id('direct-switch').get_by_role('switch').click(); pg.wait_for_timeout(300)
+        check(f'[{label}] 고급 · 정류장 직행 켜기 → 출발지 칸에 직행 중 안내', pg.get_by_test_id('transit-direct-note').count() == 1)
         pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(400)
-        check(f'[{label}] 직행으로 되돌리면 v1.0 홈 그대로(탑승 정류장 · 실시간 버스 카드)', pg.get_by_test_id('origin-chip').count() == 0 and pg.locator('section[aria-label="실시간 버스 도착"]').count() == 1
+        check(f'[{label}] 직행으로 바꾸면 직행 홈(탑승 정류장 · 실시간 버스 카드)', pg.get_by_test_id('origin-chip').count() == 0 and pg.locator('section[aria-label="실시간 버스 도착"]').count() == 1
               and pg.locator('section[aria-label="출발 추천"]').get_attribute('data-mode') is None)
+        pg.evaluate("location.hash = '#settings'"); pg.wait_for_timeout(300)
+        pg.get_by_test_id('direct-switch').get_by_role('switch').click(); pg.wait_for_timeout(300)
+        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(400)
+        check(f'[{label}] 스위치를 끄면 다시 환승 경로 홈', pg.get_by_test_id('origin-chip').count() == 1)
         ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
         check(f'[{label}] 환승 화면 가로 넘침 없음', ov <= 0, str(ov))
         check(f'[{label}] 페이지 오류 없음', not errs, str(errs)[:200])

@@ -70,7 +70,8 @@ test('하루 새 호출 상한(기본 25, 최대 30): 넘으면 부르지 않고
   for (const d of [0, 0.01, 0.02]) r.push(await svc.search(spot(d)));
   assert.deepEqual(r.map((x) => x.ok), [true, true, false]);
   assert.deepEqual([r[2].fallback, r[2].reason, fetchImpl.calls.length], ['direct', 'cap', 2]);
-  assert.match(r[2].message, /오늘 새 경로 검색 한도\(2회\).*직행으로 안내/);
+  assert.match(r[2].message, /오늘 새 경로 검색 한도\(2회\).*내일부터 찾을 수 있어요/);
+  assert.ok(!/직행/.test(r[2].message), 'v2.1: 근처 국민대행 정류장이 있을 때만 화면이 직행 안내를 덧붙임');
   assert.equal((await svc.search(spot(0))).cached, true, '저장된 출발지는 상한과 상관없이');
   assert.deepEqual([svc.health().callsToday, svc.health().left, svc.health().lastFallback.reason], [2, 0, 'cap']);
   t += 86400_000;

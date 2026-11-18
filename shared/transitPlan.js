@@ -22,6 +22,9 @@ export const TRANSIT = Object.freeze({
   maxPaths: 3,
   liveBeforeMin: 30,          // 지하철 실시간은 출발 30분 전부터(호출 아끼기)
   liveAfterMin: 20,
+  gapExtraMin: 3,             // v2.1 첫 지하철 열차 간격이 배차간격보다 이만큼(분) 길면 '왜 늦나요?' 한 줄
+  nearKuRadiusM: 400,         // v2.1 경로를 못 찾으면 출발지 이 거리 안의 국민대행 정류장으로 직행 안내
+  pathMaxPoints: 60,          // v2.1 버스 구간 경유 정류장 좌표(돌발정보 매칭용) 최대 개수
 });
 
 const str = (v) => (v == null ? '' : String(v)).trim();
@@ -35,19 +38,29 @@ export function distanceM(a, b) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/** 경로를 못 찾을 때(직행으로 안내) 화면 문구 — 서버(ODsay)와 미리보기가 같은 글 */
+/**
+ * 경로를 못 찾을 때 화면 문구 — 서버(ODsay)와 미리보기가 같은 글.
+ * v2.1: '직행으로 안내해요'를 미리 약속하지 않음 → 근처 국민대행 정류장이 있을 때만 화면이 그 안내를 덧붙임(nearbyText)
+ */
 const FALLBACK = {
-  cap: (cap) => `오늘 새 경로 검색 한도(${cap}회)를 다 썼어요. 내일 다시 찾을 수 있어요 — 그동안은 단일 정류장 직행으로 안내해요`,
-  'no-key': () => '서버에 ODSAY_API_KEY가 없어 경로를 찾을 수 없어요 — 단일 정류장 직행으로 안내해요',
-  near: () => '국민대까지 700m 안이라 대중교통 경로가 없어요 — 걸어가거나 단일 정류장 직행을 써 주세요',
-  'no-path': () => '이 출발지에서 국민대까지 대중교통 경로를 찾지 못했어요 — 단일 정류장 직행으로 안내해요',
+  cap: (cap) => `오늘 새 경로 검색 한도(${cap}회)를 다 썼어요. 이 출발지는 내일부터 찾을 수 있어요`,
+  'no-key': () => '서버에 ODSAY_API_KEY가 없어 경로를 찾을 수 없어요',
+  near: () => '국민대까지 700m 안이라 대중교통 경로가 없어요 — 걸어가는 편이 빨라요',
+  'no-path': () => '이 출발지에서 국민대까지 대중교통 경로를 찾지 못했어요',
   'out-of-area': () => '서비스 지역 밖이에요. 수도권 출발지만 찾을 수 있어요',
-  auth: () => 'ODsay 키 인증에 실패했어요 — ODsay 콘솔의 URI(웹) 주소와 Render의 ODSAY_API_KEY를 확인해 주세요. 그동안은 단일 정류장 직행으로 안내해요',
+  auth: () => 'ODsay 키 인증에 실패했어요 — ODsay 콘솔의 URI(웹) 주소와 Render의 ODSAY_API_KEY를 확인해 주세요',
   store: () => '저장소(Upstash)에 연결하지 못해 오늘 호출 수를 확인할 수 없어요. 한도를 지키려고 경로 검색을 잠시 쉬어요',
-  error: () => 'ODsay에서 경로를 받지 못했어요. 잠시 뒤 다시 해 주세요 — 그동안은 단일 정류장 직행으로 안내해요',
+  error: () => 'ODsay에서 경로를 받지 못했어요. 잠시 뒤 다시 찾아 주세요',
   bad: () => '출발지 위치가 올바르지 않아요',
 };
 export const fallbackText = (reason, cap = 25) => (FALLBACK[reason] || FALLBACK.error)(cap);
+/** 근처 국민대행 정류장을 찾아볼 만한 이유(700m 안 · 좌표 오류 · 지역 밖은 아님) */
+export const NEARBY_REASONS = Object.freeze(['cap', 'no-key', 'no-path', 'auth', 'store', 'error']);
+/** v2.1 예전에 찾아 둔 경로(30~90일)를 쓸 때 화면 문구 */
+export function staleText(reason, ageDays, cap = 25) {
+  const why = reason === 'cap' ? `오늘 새 경로 검색 한도(${cap}회)를 다 써서` : reason === 'no-key' ? '지금은 새 경로를 찾을 수 없어서' : 'ODsay에서 새 경로를 받지 못해서';
+  return `${why}, ${ageDays}일 전에 찾아 둔 경로를 보여 드려요`;
+}
 
 /* ── 색 · 이름 ── */
 // 막대(사용자 지정): 도보 회색 · 간선 파랑 · 지하철 하늘색 · 지선/일반 초록 (+ 광역 빨강 · 순환 노랑)
@@ -98,6 +111,22 @@ export function odsayError(json) {
   return { code: str(x.code), message: str(x.message || x.msg) };
 }
 
+const r5 = (v) => Math.round(v * 1e5) / 1e5;
+/**
+ * v2.1 버스 구간이 지나는 정류장 좌표(ODsay passStopList.stations의 x · y) → [{ lat, lon, name }] — 경로 주변 돌발정보 매칭용.
+ * 좌표가 없거나 이상한 정류장은 빼고, 너무 길면 고르게 줄임(처음 · 끝은 남김)
+ */
+export function busPath(stations) {
+  const pts = (Array.isArray(stations) ? stations : [])
+    .map((x) => ({ lat: num(x?.y), lon: num(x?.x), name: str(x?.stationName) }))
+    .filter((p) => p.lat >= 33 && p.lat <= 39 && p.lon >= 124 && p.lon <= 132)
+    .map((p) => ({ lat: r5(p.lat), lon: r5(p.lon), name: p.name.slice(0, 30) }));
+  const max = TRANSIT.pathMaxPoints;
+  if (pts.length <= max) return pts;
+  const step = (pts.length - 1) / (max - 1);
+  return Array.from({ length: max }, (_, k) => pts[Math.round(k * step)]);
+}
+
 /** ODsay path 하나 → 줄인 경로(화면 · 저장 · 계산용). 쓸 수 없는 경로면 null */
 export function parseOdsayPath(p, index = 0) {
   const legs = [];
@@ -119,8 +148,10 @@ export function parseOdsayPath(p, index = 0) {
     } else {
       const buses = lane.map((l) => ({ no: str(l.busNo), label: BUS_TYPE[num(l.type)] || '버스' })).filter((b) => b.no);
       if (!buses.length) return null;
+      const path = busPath(stations);
       legs.push({ kind: 'bus', ...base, no: buses[0].no, typeLabel: buses[0].label, color: busColor(buses[0].label), buses: buses.slice(0, 6).map((b) => b.no),
-        from: { ...base.from, arsId: arsOf(s.startArsID ?? stations[0]?.arsID) }, to: { ...base.to, arsId: arsOf(s.endArsID ?? stations[stations.length - 1]?.arsID) } });
+        from: { ...base.from, arsId: arsOf(s.startArsID ?? stations[0]?.arsID) }, to: { ...base.to, arsId: arsOf(s.endArsID ?? stations[stations.length - 1]?.arsID) },
+        ...(path.length >= 2 ? { path } : {}) });
     }
   }
   const transit = legs.filter((l) => l.kind !== 'walk');
@@ -315,3 +346,39 @@ export function wantsLive(stdPlan, nowMin) {
 export const subwayStationName = (leg) => stationKey(leg?.from?.name);
 /** 경로의 첫 · 마지막 탑승 구간 번호 */
 export function legEnds(route) { const idx = transitIdx(route?.legs || []); return { first: idx[0], last: idx[idx.length - 1] }; }
+
+/* ── v2.1 환승 경로 '왜 늦나요?'(직행과 같은 기준 + 첫 지하철 간격) ── */
+const stationLabel = (name) => { const n = str(name); return n && !/역$/.test(n) ? `${n}역` : n; };
+
+/**
+ * 계산이 고른 마지막 국민대행 버스(서울시 실시간 trips 중 실제로 탈 차) — 서버가 붙인 explain · delayMin · congestion을 그대로 씀.
+ * 마지막 구간이 버스가 아니거나 실시간이 없으면(표준 대기로 계산) null
+ */
+export function finalTripOf(route, plan, rt) {
+  const { last } = legEnds(route);
+  if (plan?.state !== 'ok' || route?.legs?.[last]?.kind !== 'bus' || rt?.final?.i !== last) return null;
+  const s = plan.pick.legs.find((l) => l.i === last && l.kind !== 'walk');
+  if (!s || s.src === 'std') return null;
+  return (rt.final.trips || []).find((t) => t.no === s.vehicle) || null;
+}
+
+/**
+ * 첫 지하철: 내가 탈 열차 바로 앞의 간격(앞 열차 → 내 열차, 앞 열차가 없으면 지금 → 내 열차)이
+ * ODsay 배차간격보다 TRANSIT.gapExtraMin분 이상 길면 그 사실(서울시 실시간 기준). 아니면 null.
+ * 도착 문구로 어림한 열차(approx)는 시각이 정확하지 않아 쓰지 않음. AI 없이 고정 문장(기본 안내)
+ * @returns {{ line, station, gapMin, intervalMin, extraMin, sample, text } | null}
+ */
+export function subwayGap(route, plan, rt, nowMin) {
+  const { first } = legEnds(route);
+  const leg = route?.legs?.[first], f = rt?.first;
+  if (plan?.state !== 'ok' || leg?.kind !== 'subway' || f?.kind !== 'subway' || f.i !== first || !['seoul', 'sample'].includes(f.source)) return null;
+  const s = plan.pick.legs.find((l) => l.i === first && l.kind !== 'walk');
+  const iv = num(leg.intervalMin);
+  if (!s || s.src !== 'live' || s.approx || !(iv > 0) || !Number.isFinite(nowMin)) return null;
+  const ats = (f.trains || []).filter((x) => !x.approx && Number.isFinite(x.etaSec)).map((x) => nowMin + x.etaSec / 60);
+  const prev = Math.max(nowMin, ...ats.filter((a) => a < s.board - 0.05));
+  const gap = s.board - prev, extraMin = Math.round(gap - iv);
+  if (extraMin < TRANSIT.gapExtraMin) return null;
+  const station = stationLabel(leg.from?.name);
+  return { line: leg.line, station, gapMin: Math.round(gap), intervalMin: iv, extraMin, sample: f.source === 'sample', text: `${station} ${leg.line} 열차 간격이 평소보다 길어요.` };
+}

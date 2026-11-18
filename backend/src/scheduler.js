@@ -4,16 +4,19 @@
 // - 예시(모의) 데이터로 계산된 알림은 본문에 출처를 밝힙니다(PUSH_WHEN_MOCK=skip이면 보내지 않음).
 // - 보낼 때마다 수신 확인 번호를 실어 보내고 기록(pushLog) — 휴대폰 서비스 워커가 '받았음'을 알리면 설정 화면에 '수신 확인됨'
 // - Render 무료 서버는 15분 동안 접속이 없으면 잠들어 이 1분 타이머도 멈춥니다 → cron-job.org가 /api/wake로 깨워 둠(README)
+// - v2.1: 같은 타이머로 밤에 주요 환승역 경로를 미리 찾아 둠(warmer.step — 시간 · 남은 한도를 스스로 확인)
 import { planFor } from './planner.js';
 import { sendAndLog } from './push.js';
 
 export const MOCK_NOTE = ' (예시 교통 데이터 기준 · 실시간 아님)';
 const SEVERITY = { danger: 2, warn: 1 };
 
-export function createScheduler({ store, provider, pusher, now = () => new Date(), intervalMs = 60000, windowMin = 180, pushWhenMock = 'label', log = console, subway = null }) {
+export function createScheduler({ store, provider, pusher, now = () => new Date(), intervalMs = 60000, windowMin = 180, pushWhenMock = 'label', log = console, subway = null, warmer = null }) {
   let timer = null, running = false;
   const stats = { lastTickAt: null, ticks: 0, sent: 0, skippedMock: 0, lastError: null };
   async function tick() {
+    // v2.1 밤에 주요 환승역 경로 미리 찾기(정해진 시간 · 남은 한도일 때만 한 곳) — 알림 계산을 기다리게 하지 않음
+    if (warmer) warmer.step(now()).catch(() => {});
     if (running) return [];
     running = true;
     const sent = [];

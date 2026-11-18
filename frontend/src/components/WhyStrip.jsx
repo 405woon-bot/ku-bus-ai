@@ -40,9 +40,10 @@ const TagSample = () => <span className="mr-1 inline-flex h-[17px] items-center 
  * - 오른쪽 +N분은 서버 계산(원활 = 시속 20km로 달렸을 때보다 더 걸리는 시간)
  * - '근거'를 누르면: 서버 계산 · 가장 느린 도로 · 날씨(기상청) · 경로 주변 돌발정보(서울시)를 펼침
  * - 버스가 예시 데이터면(source 'example') 점선 + '예시 데이터 · 실시간 아님', 미리보기 예시(sample)도 '예시' 표시
- * @param {{ trip: object, why: { source, text, reason?, facts?, sample?, model? }, delayMin?: number|null, data?: object, weather?: object }} p
+ * v2.1 환승 경로에서는 마지막 국민대행 버스 기준(who = '마지막 버스 1213번' 한 줄을 위에)
+ * @param {{ trip: object, why: { source, text, reason?, facts?, sample?, model? }, delayMin?: number|null, data?: object, weather?: object, who?: string }} p
  */
-export default function WhyStrip({ trip, why, delayMin, data, weather }) {
+export default function WhyStrip({ trip, why, delayMin, data, weather, who = '' }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const example = why.source === 'example';
@@ -82,6 +83,7 @@ export default function WhyStrip({ trip, why, delayMin, data, weather }) {
         <button type="button" aria-expanded={false} aria-controls={panelId} onClick={() => setOpen(true)} className="flex w-full min-w-0 items-center gap-2.5 text-left">
           <span className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full ${T.ic}`}><IconWhy /></span>
           <span className="min-w-0 flex-1">
+            {who && <span data-testid="why-who" className={`block text-[11.5px] font-semibold leading-snug ${T.k}`}>{who}</span>}
             <span data-testid="why-text" className={`line-clamp-2 text-[14px] leading-[1.42] ${T.tx}`}>
               <b className={`mr-1 font-bold ${T.b}`}>왜 늦나요?</b>{tag}{sample && !example && <TagSample />}{text}
             </span>
@@ -95,7 +97,7 @@ export default function WhyStrip({ trip, why, delayMin, data, weather }) {
       ) : (
         <div id={panelId}>
           <button type="button" aria-expanded aria-controls={panelId} onClick={() => setOpen(false)} className="flex w-full items-center justify-between gap-2 text-left">
-            <span className={`text-[12.5px] font-bold ${T.k}`}>왜 늦나요? {tag}{sample && !example && <TagSample />}</span>
+            <span className={`text-[12.5px] font-bold ${T.k}`}>왜 늦나요?{who ? ` · ${who}` : ''} {tag}{sample && !example && <TagSample />}</span>
             <span className="flex items-center text-[12.5px] font-semibold text-primary">접기<IconChevron className="h-3.5 w-3.5 -rotate-90" /></span>
           </button>
           <p data-testid="why-full" className={`mt-1 text-[15px] font-bold leading-[1.45] ${T.tx}`}>{text}</p>
@@ -142,5 +144,30 @@ function Fact({ k, testid, children }) {
       <span className="block text-[11.5px] font-bold text-[#8A7A50]">{k}</span>
       {children}
     </li>
+  );
+}
+
+function IconSubway({ className = 'h-[17px] w-[17px]' }) {
+  return <svg viewBox="0 0 24 24" className={className} aria-hidden="true"><g {...P}><rect x="6" y="3" width="12" height="14" rx="3" /><path d="M6 11h12M9 20l-2 2M15 20l2 2M9 14.5v.1M15 14.5v.1" /></g></svg>;
+}
+/**
+ * v2.1 환승 경로 첫 지하철: 내가 탈 열차 바로 앞 간격이 배차간격보다 3분 이상 길 때 한 줄(shared/transitPlan.js subwayGap).
+ * AI를 부르지 않는 고정 문장(기본 안내) · 오른쪽 +N분 = 실시간 열차 간격 − 평소 배차간격(서울시 실시간 기준)
+ */
+export function GapStrip({ gap }) {
+  return (
+    <section aria-label="왜 늦나요? · 첫 지하철" data-testid="gap-strip" className="flex min-w-0 items-center gap-2.5 rounded-2xl border border-line bg-panel py-[9px] pl-3.5 pr-3 shadow-card">
+      <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-surface text-[#666]"><IconSubway /></span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[11.5px] font-semibold leading-snug text-ink-muted">첫 지하철 {gap.line}</span>
+        <span data-testid="gap-text" className="line-clamp-2 text-[14px] leading-[1.42] text-ink">
+          <b className="mr-1 font-bold">왜 늦나요?</b><TagRule />{gap.sample && <TagSample />}{gap.text}
+        </span>
+        {gap.sample && <span className="mt-1 block"><SampleTag>예시 데이터 · 실시간 아님</SampleTag></span>}
+      </span>
+      <span className="grid shrink-0 justify-items-end gap-[3px]" title={`실시간 열차 간격 ${gap.gapMin}분 · 평소 배차간격 ${gap.intervalMin}분(서울시 실시간 기준)`}>
+        <span data-testid="gap-plus" className="num text-[17px] font-bold leading-none text-warn">+{gap.extraMin}분</span>
+      </span>
+    </section>
   );
 }

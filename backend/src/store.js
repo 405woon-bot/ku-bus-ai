@@ -47,7 +47,8 @@ export const defaultUser = () => ({
   personal: emptyPersonal(), // 내 걸음 반영 { offsetMin(−5 ~ +15), samples, updatedAt } — '도착했어요!'로 배움
   arrivals: [],    // 최근 도착 기록(최대 20개) — 같은 날 같은 수업은 한 번만
   // v2.0 출발 방식: 'direct'(단일 정류장 직행) | 'transit'(출발지 환승 경로, ODsay에서 고른 경로를 그대로 저장)
-  transit: { mode: 'direct', origin: null, route: null, savedAt: null },
+  // v2.1 retry: 경로를 못 찾아 근처 국민대행 정류장으로 안내 중일 때 다시 찾을 출발지 { origin, reason, at }
+  transit: { mode: 'direct', origin: null, route: null, savedAt: null, retry: null },
   updatedAt: 0,
 });
 

@@ -21,6 +21,7 @@ import { Header, PreviewBar, TabBar, TABS } from './components/AppShell.jsx';
 import HomeScreen from './components/HomeScreen.jsx';
 import TimetableScreen from './components/TimetableScreen.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
+import OriginFinder from './components/OriginFinder.jsx';
 import StopPicker from './components/StopPicker.jsx';
 import ClassDialog from './components/ClassDialog.jsx';
 import ImportDialog from './components/ImportDialog.jsx';
@@ -109,7 +110,7 @@ export default function App({ handoff = null }) {
   const { walkToStopMin, marginMin } = state.prefs;
   const personalOffsetMin = state.personal?.offsetMin || 0; // '도착했어요!'로 배운 내 걸음 반영(서버 알림도 같은 값)
   // 환승 경로의 실시간 재료(첫 지하철 · 버스, 마지막 국민대행 버스) — 서버가 지하철은 출발 30분 전부터만 받아 옴
-  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin });
+  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin, preview: MODE === 'sample' ? state.preview : null });
   const rec = useMemo(() => {
     if (transitOn) return planTransit({ route: tr.route, cls: todayClass, nowMin: now.minutes, rt: tlive.rt, walkTable, marginMin, personalOffsetMin });
     return state.stop ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin }) : null;
@@ -145,15 +146,19 @@ export default function App({ handoff = null }) {
     setTimeout(() => setHlKCard(false), 2600);
   }, [go]);
   const [hlTransit, setHlTransit] = useState(false);
-  const goTransit = useCallback((want) => { // 설정 · 출발 방식 칸으로 이동해 잠깐 강조('transit'이면 환승 경로 모드로 바꿔서)
-    if (want === 'transit' && state.transit?.mode !== 'transit') {
-      dispatch({ type: 'transitSaved', transit: { ...state.transit, mode: 'transit' } });
-      if (MODE === 'api') api.transitMode('transit').then((r) => r?.transit && dispatch({ type: 'transitSaved', transit: r.transit })).catch(() => {});
-    }
+  const [autoOrigin, setAutoOrigin] = useState(null); // v2.1 홈 [경로 다시 찾기] → 기억해 둔 출발지로 설정에서 바로 다시 찾기
+  const goTransit = useCallback((want) => { // 설정 · 출발지 칸으로 이동해 잠깐 강조('retry'면 기억해 둔 출발지로 바로 다시 찾기)
+    setAutoOrigin(want === 'retry' && state.transit?.retry?.origin ? { ...state.transit.retry.origin, n: Date.now() } : null);
     go('settings'); setHlTransit(true);
     setTimeout(() => { try { document.getElementById('transit')?.scrollIntoView({ block: 'start' }); } catch { /* 무시 */ } }, 60);
     setTimeout(() => setHlTransit(false), 2600);
-  }, [go, dispatch, state.transit]);
+  }, [go, state.transit]);
+  // v2.1 설정 · 고급의 '정류장 직행으로 안내' 스위치(경로가 있어도 직행으로)
+  const setDirectMode = useCallback((direct) => {
+    const m = direct ? 'direct' : 'transit';
+    dispatch({ type: 'transitSaved', transit: { ...state.transit, mode: m, retry: null } });
+    if (MODE === 'api') api.transitMode(m).then((r) => r?.transit && dispatch({ type: 'transitSaved', transit: r.transit })).catch(() => {});
+  }, [dispatch, state.transit]);
   const resetAll = useCallback(() => {
     dispatch({ type: 'resetAll' });
     if (MODE === 'api') {
@@ -162,6 +167,8 @@ export default function App({ handoff = null }) {
     }
   }, [dispatch]);
 
+  // 처음 화면에서 경로 · 정류장을 정하면 홈이 바뀌므로 맨 위(출발 추천)부터 보이게
+  const toTop = useCallback(() => { try { window.scrollTo({ top: 0 }); } catch { /* 무시 */ } }, []);
   const [dialog, setDialog] = useState(null);
   const close = useCallback(() => setDialog(null), []);
   const setStop = (stop) => { dispatch({ type: 'setStop', stop }); close(); go('home'); };
@@ -184,8 +191,9 @@ export default function App({ handoff = null }) {
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             arrival={{ ...arrival, cls: todayClass }} kcardReady={kcard.status === 'ready'} personal={state.personal}
-            transit={{ on: transitOn, pending: tr.mode === 'transit' && !transitOn, origin: tr.origin, route: tr.route, live: tlive }} onOpenTransit={goTransit}
-            onPickStop={() => setDialog({ type: 'stop' })} onSelectStop={setStop} onGoTimetable={() => go('timetable')} />
+            transit={{ on: transitOn, pending: tr.mode === 'transit' && !transitOn, retry: tr.retry || null, origin: tr.origin, route: tr.route, live: tlive }} onOpenTransit={goTransit}
+            renderFinder={(wrap) => <OriginFinder mode={MODE} state={state} dispatch={dispatch} now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable} wrap={wrap} onDone={toTop} />}
+            onPickStop={() => setDialog({ type: 'stop' })} onGoTimetable={() => go('timetable')} />
         )}
         {tab === 'timetable' && (
           <TimetableScreen mode={MODE} classes={state.classes} sample={state.sampleTimetable} now={now} highlightId={todayClass?.id} onOpen={setDialog}
@@ -200,9 +208,10 @@ export default function App({ handoff = null }) {
         {tab === 'settings' && (
           <SettingsScreen mode={MODE} state={state} dispatch={dispatch} onPickStop={() => setDialog({ type: 'stop' })}
             perm={perm} onRequestPerm={async () => setPerm(await requestNotifyPermission())} onTestAlarm={alarms.test}
-            info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} health={health}
+            info={info} push={push} onOpenGuide={() => setGuide(true)} sync={sync.status} live={live} transitLive={tlive.rt ? { ...tlive.rt, sample: Boolean(tlive.sample) } : null} health={health}
             kcard={kcard} onViewCard={arrival.view} onResetPersonal={arrival.reset} highlightKCard={hlKCard} onResetAll={resetAll}
-            now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable} highlightTransit={hlTransit} />
+            now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable} highlightTransit={hlTransit}
+            autoOrigin={autoOrigin} onOriginDone={() => setAutoOrigin(null)} onDirectMode={setDirectMode} />
         )}
       </main>
 

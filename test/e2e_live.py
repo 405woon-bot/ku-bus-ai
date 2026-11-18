@@ -45,17 +45,21 @@ with sync_playwright() as p:
     b = p.chromium.launch()
     uid = f'e2e{int(time.time())}'
 
-    # ① 서울시 응답 서버: 처음 화면(정류장 고르기) → 정류장 검색·선택 → 홈 3요소
+    # ① 서울시 응답 서버: 처음 화면(v2.1 출발지 먼저 · 정류장 직접 고르기 링크) → 정류장 검색·선택 → 홈 3요소
     ctx = context(b, p, 8801, uid, viewport={'width': 1440, 'height': 1000})
     api(ctx, 8801, uid, 'PUT', '/api/me/timetable', {'classes': [CLASS]})
     pg = ctx.new_page(); errs = []
     pg.on('pageerror', lambda e: errs.append(str(e)))
     pg.clock.install(time=T0)
     pg.goto('http://localhost:8801/')
-    pg.get_by_text('어느 정류장에서 버스를 타세요?').wait_for(timeout=10000)
-    check('처음 화면: 탑승 정류장 고르기(입력창 하나)', pg.locator('input[type="search"]').count() == 1)
-    pg.locator('input[type="search"]').fill('정릉')
-    pg.get_by_role('button', name=re.compile('정릉시장.*08901')).click(timeout=10000)
+    onb = pg.get_by_test_id('onboarding'); onb.wait_for(timeout=10000)
+    check('v2.1 처음 화면: 어디서 출발하세요? · GPS · 역 이름 칸 하나 · 출발 방식 고르기 없음 · 정류장 직접 고르기 링크', '어디서 출발하세요?' in onb.inner_text() and onb.get_by_test_id('transit-gps').count() == 1
+          and onb.locator('input[type="search"]').count() == 1 and pg.get_by_role('radio').count() == 0 and onb.get_by_test_id('pick-stop-link').count() == 1)
+    onb.get_by_test_id('pick-stop-link').click()
+    dlg = pg.get_by_role('dialog'); dlg.wait_for(timeout=5000)
+    check('정류장 직접 고르기 → 탑승 정류장 고르기 창(입력창 하나)', '탑승 정류장 고르기' in dlg.inner_text() and dlg.locator('input[type="search"]').count() == 1)
+    dlg.locator('input[type="search"]').fill('정릉')
+    dlg.get_by_role('button', name=re.compile('정릉시장.*08901')).click(timeout=10000)
     card = pg.locator('section[aria-label="출발 추천"]'); card.wait_for(timeout=10000)
     pg.wait_for_selector('[data-testid="data-line"] [data-source="seoul"]', timeout=10000)
     for _ in range(50):  # 화면이 탑승 정류장을 서버에 저장(0.4초 뒤)할 때까지
@@ -115,6 +119,8 @@ with sync_playwright() as p:
     # 설정: 데이터 · 서버 연결
     pg.get_by_role('link', name='설정').first.click()
     pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
+    check('v2.1 설정: 정류장만 고른 사람은 고급(정류장 직행) 펼침 · 출발지 칸에 직행 중 안내 · 경로가 없어 스위치 없음', pg.get_by_test_id('advanced').get_attribute('data-open') == 'true'
+          and '정릉시장' in flat(pg.get_by_test_id('stop-row').inner_text()) and pg.get_by_test_id('transit-direct-note').count() == 1 and pg.get_by_test_id('direct-switch').count() == 0)
     check('설정: 실시간 데이터 배지(서울시 실시간)', pg.locator('[data-source="seoul"]').count() >= 1)
     check('설정: 서버와 동기화됨(synced)', pg.get_by_text('서버와 동기화됨(synced)').count() == 1)
     inc = flat(pg.locator('[data-testid="incident-status"]').inner_text())
@@ -299,9 +305,10 @@ with sync_playwright() as p:
     check('[도착] 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
 
-    # ⑥ v2.0 출발지 환승 경로(가짜 ODsay · 하루 3건으로 줄인 상한 / 가짜 서울시 실시간 지하철 · 버스):
-    #    처음 화면 [환승해서 가요] → 설정(출발지 환승 경로) → 국민대 700m 안(직행 안내) → GPS(홍대입구 근처) → 추천 경로 3개
-    #    → [이 경로로 안내 설정](서버 저장) → 홈(첫 지하철 · 국민대행 버스 실시간) → 하루 상한 넘김(오류 대신 직행 안내) → health → 직행으로
+    # ⑥ v2.1 출발지 먼저(가짜 ODsay · 하루 3건으로 줄인 상한 / 가짜 서울시 실시간 지하철 · 버스 · 돌발정보 · 기상청 · Gemini):
+    #    처음 화면 '어디서 출발하세요?' → 국민대 700m 안(걸어가는 편이 빨라요) → GPS(홍대입구 근처) → 추천 경로 3개
+    #    → [이 경로로 안내 설정](서버 저장 · 바로 환승 홈) → 환승 '왜 늦나요?' 재료 · 설정 상태(대기 아님)
+    #    → 하루 상한 넘김(내일부터 · 근처 국민대행 정류장 400m) → [이 정류장] → 홈 [경로 다시 찾기] → 고급 · 정류장 직행 스위치
     uid4 = uid + 't'
     HONGDAE = {'latitude': 37.557527, 'longitude': 126.923778}
     ctx = context(b, p, 8801, uid4, **p.devices['iPhone 13'], geolocation=HONGDAE)
@@ -313,21 +320,16 @@ with sync_playwright() as p:
     pg = ctx.new_page(); errs = []
     pg.on('pageerror', lambda e: errs.append(str(e)))
     pg.clock.install(time=srv); pg.goto('http://localhost:8801/')
-    pg.get_by_text('어느 정류장에서 버스를 타세요?').wait_for(timeout=10000)
-    link = pg.get_by_test_id('open-transit')
-    check('[환승] 처음 화면: 정류장 검색 아래 [환승해서 가요] 링크', link.count() == 1, flat(link.inner_text()) if link.count() else '')
-    link.click()
-    pg.wait_for_selector('[data-testid="transit-settings"][data-mode="transit"]', timeout=8000)
-    for _ in range(20):
-        if (api(ctx, 8801, uid4, 'GET', '/api/me').get('transit') or {}).get('mode') == 'transit': break
-        time.sleep(0.2)
-    check('[환승] 링크 → 설정 · 출발 방식 = 출발지 환승 경로(서버에도 저장)', api(ctx, 8801, uid4, 'GET', '/api/me')['transit']['mode'] == 'transit' and pg.evaluate('location.hash') == '#settings')
-    origin_input = pg.locator('[data-testid="transit-origin"] input[type="search"]')
-    origin_input.fill('국민대')
+    onb = pg.get_by_test_id('onboarding'); onb.wait_for(timeout=10000)
+    check('[환승] v2.1 처음 화면: 출발지만 물음(출발 방식 고르기 · [환승해서 가요] 링크 없음)', onb.get_by_test_id('transit-gps').count() == 1 and pg.get_by_role('radio').count() == 0
+          and pg.get_by_test_id('open-transit').count() == 0 and pg.get_by_test_id('pick-stop-link').count() == 1)
+    onb.locator('input[type="search"]').fill('국민대')
     pg.get_by_role('button', name=re.compile('국민대학교앞')).first.click()
     fbk = pg.get_by_test_id('transit-fallback'); fbk.wait_for(timeout=8000)
+    ftx = flat(fbk.inner_text())
     h0 = api(ctx, 8801, uid4, 'GET', '/api/health')['odsay']
-    check('[환승] 국민대 700m 안 출발지 → ODsay를 부르지 않고 직행 안내', fbk.get_attribute('data-reason') == 'near' and '직행' in flat(fbk.inner_text()) and h0['callsToday'] == 0, flat(fbk.inner_text())[:120])
+    check('[환승] 국민대 700m 안 출발지 → ODsay를 부르지 않음 · 걸어가는 편이 빨라요(직행 약속 · 근처 정류장 찾기 없음)', fbk.get_attribute('data-reason') == 'near' and '걸어가는 편이 빨라요' in ftx and '직행' not in ftx
+          and pg.get_by_test_id('nearby-stops').count() == 0 and pg.get_by_test_id('nearby-none').count() == 0 and h0['callsToday'] == 0 and pg.get_by_test_id('onboarding').count() == 1, ftx[:120])
     pg.get_by_test_id('transit-gps').click()
     opts = pg.get_by_test_id('route-option'); opts.first.wait_for(timeout=10000)
     hdr = flat(pg.get_by_test_id('transit-results').locator('p').first.inner_text())
@@ -349,12 +351,10 @@ with sync_playwright() as p:
     hdr2 = flat(pg.get_by_test_id('transit-results').locator('p').first.inner_text())
     check('[환승] 같은 위치 다시 검색 → 저장된 결과(오늘 호출 안 씀)', '저장된 검색 결과' in hdr2 and api(ctx, 8801, uid4, 'GET', '/api/health')['odsay']['callsToday'] == 1, hdr2)
     pg.get_by_test_id('route-option').first.get_by_test_id('route-choose').click()
-    pg.get_by_test_id('transit-saved').wait_for(timeout=8000)
-    me = api(ctx, 8801, uid4, 'GET', '/api/me')
-    check('[환승] [이 경로로 안내 설정] → 서버(외부 DB)에 저장', me['transit']['mode'] == 'transit' and me['transit']['route']['title'] == '2호선 → 4호선 → 171'
-          and me['transit']['origin']['name'] == 'GPS로 고른 위치', f"{me['transit']['mode']} {me['transit']['route']['title']}")
-    pg.evaluate("location.hash = '#home'")
     pg.locator('section[aria-label="출발 추천"][data-mode="transit"]').wait_for(timeout=8000)
+    me = api(ctx, 8801, uid4, 'GET', '/api/me')
+    check('[환승] [이 경로로 안내 설정] → 서버(외부 DB)에 저장 · 처음 화면에서 바로 환승 홈', me['transit']['mode'] == 'transit' and me['transit']['route']['title'] == '2호선 → 4호선 → 171'
+          and me['transit']['origin']['name'] == 'GPS로 고른 위치' and pg.get_by_test_id('onboarding').count() == 0, f"{me['transit']['mode']} {me['transit']['route']['title']}")
     pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('갱신')", timeout=10000)
     live = api(ctx, 8801, uid4, 'GET', '/api/transit/live')
     plan = api(ctx, 8801, uid4, 'GET', '/api/plan')
@@ -369,33 +369,90 @@ with sync_playwright() as p:
     sub_row = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="subway"]').first.inner_text())
     check('[환승] 2호선 줄: 탑승 시각 + 실시간 · 배차 간격 예상 표시', '탑승' in sub_row and ('실시간' in sub_row or '배차 간격 예상' in sub_row), sub_row)
     tb = pg.locator('nav.fixed').bounding_box(); third = pg.locator('section[aria-label="강의실 도착 예정"]').bounding_box()
-    check('[환승] 휴대폰 첫 화면에 출발 · 도착 카드가 함께 보임', third['y'] + third['height'] <= tb['y'], f"bottom={third['y'] + third['height']:.0f} tab={tb['y']:.0f}")
+    top = pg.locator('section[aria-label="출발 추천"]').bounding_box()
+    check('[환승] 경로를 고르면 맨 위부터: 휴대폰 첫 화면에 출발 · 도착 카드가 함께 보임', top['y'] >= 0 and third['y'] + third['height'] <= tb['y'], f"top={top['y']:.0f} bottom={third['y'] + third['height']:.0f} tab={tb['y']:.0f}")
     pg.screenshot(path=str(OUT / 'live_iphone13_transit_home.png'))
-    # 하루 상한(e2e 서버 3건): 새 출발지 2건을 더 찾으면 3/3 → 화면에서 새 출발지를 찾으면 오류 대신 직행 안내(저장한 경로는 그대로)
+    # v2.1 C: 환승에도 '왜 늦나요?'(직행과 같은 기준 · 같은 코드) — 화면 요청에만 경로 주변 돌발정보 · 날씨 · 마지막 국민대행 버스 설명. 경로 좌표는 보내지 않음
+    t171 = next((t for t in live['final']['trips'] if t['no'] == '171'), {})
+    check('[환승] v2.1 /api/transit/live: 돌발정보(서울시) · 날씨(기상청) · 마지막 171번 지연 11분 · Gemini 설명 · 좌표(path) 없음', live['incidents']['source'] == 'seoul' and live['weather']['source'] == 'kma'
+          and t171.get('delayMin') == 11 and (t171.get('explain') or {}).get('source') == 'gemini' and '"path"' not in json.dumps(live),
+          f"{live['incidents'].get('source')} {live['weather'].get('source')} {t171.get('delayMin')} {(t171.get('explain') or {}).get('source')}")
+    why = pg.get_by_test_id('why-strip'); wt = flat(why.inner_text()) if why.count() else ''
+    check("[환승] v2.1 홈 '왜 늦나요?'(직행과 같은 기준): 마지막 버스 171번 · 노란 줄 · AI 문장 · +11분 · 근거", why.count() == 1 and flat(pg.get_by_test_id('why-who').inner_text()) == '마지막 버스 171번'
+          and why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai' and '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' in wt and '+11분' in wt and '근거' in wt, wt[:160])
+    pg.screenshot(path=str(OUT / 'live_iphone13_transit_why.png'))
+    # 하루 상한(e2e 서버 3건): 새 출발지 2건을 더 찾으면 3/3 → 새 출발지는 '내일부터' + 근처 국민대행 정류장(저장한 경로는 그대로)
     for o in ({'lat': 37.5665, 'lon': 126.9780, 'name': '시청', 'kind': 'stop'}, {'lat': 37.5133, 'lon': 127.1001, 'name': '잠실', 'kind': 'stop'}):
         api(ctx, 8801, uid4, 'POST', '/api/transit/search', o)
+    # 설정 · 데이터 연결: 환승 경로로 안내 중이어도 돌발정보 · 날씨가 '대기'가 아님(환승 실시간 응답으로 보여 줌)
     pg.get_by_test_id('origin-chip').click()
     pg.wait_for_selector('[data-testid="transit-origin"]', timeout=8000)
+    pg.wait_for_function("() => !(document.querySelector('[data-testid=\"incident-status\"]')?.innerText || '').includes('대기')", timeout=8000)
+    inc = flat(pg.get_by_test_id('incident-status').inner_text()); wxs = flat(pg.get_by_test_id('weather-status').inner_text()); ais = flat(pg.get_by_test_id('explain-status').inner_text())
+    check('[환승] v2.1 설정: 환승 경로여도 돌발정보 · 날씨 · AI 설명 연결됨(대기 아님)', inc.startswith('연결됨 · ') and wxs.startswith('연결됨 · ') and ais.startswith('연결됨'), f'{inc} / {wxs} / {ais}')
     origin_input = pg.locator('[data-testid="transit-origin"] input[type="search"]')
     origin_input.fill('정릉')
     pg.get_by_role('button', name=re.compile('정릉시장')).first.click()
     fbk = pg.get_by_test_id('transit-fallback'); fbk.wait_for(timeout=8000)
-    ftx = flat(fbk.inner_text())
+    near = pg.get_by_test_id('nearby-stops'); near.wait_for(timeout=8000)
+    ftx = flat(fbk.inner_text()); ntx = flat(near.inner_text())
     me = api(ctx, 8801, uid4, 'GET', '/api/me')
-    check('[환승] 하루 상한 넘김 → 오류 대신 직행 안내 · 오늘 3/3회 · 저장한 경로는 그대로', fbk.get_attribute('data-reason') == 'cap' and '직행' in ftx and '3/3회' in ftx
-          and me['transit']['route']['title'] == '2호선 → 4호선 → 171', ftx[:160])
+    check('[환승] v2.1 하루 상한 넘김 → 내일부터 찾을 수 있어요 · 직행 약속 없음 · 오늘 3/3회 · 저장한 경로 그대로', fbk.get_attribute('data-reason') == 'cap' and '내일부터 찾을 수 있어요' in ftx and '직행' not in ftx
+          and '3/3회' in ftx and me['transit']['mode'] == 'transit' and me['transit']['route']['title'] == '2호선 → 4호선 → 171', ftx[:160])
+    check('[환승] v2.1 근처 국민대행 정류장(400m): 정릉시장 120m · 걸어서 2분 · 171 · 경로가 있으니 자동으로 바꾸지 않고 [이 정류장]', pg.get_by_test_id('nearby-stop').count() == 1
+          and '정릉시장' in ntx and '120 m' in ntx and '걸어서 2분' in ntx and '171' in ntx and '바꿀 수도 있어요' in ntx and pg.get_by_test_id('nearby-apply').count() == 1
+          and pg.get_by_test_id('bigstation-tip').count() == 0, ntx[:160])
+    pg.screenshot(path=str(OUT / 'live_iphone13_cap_nearby.png'))
+    pg.get_by_test_id('nearby-apply').click()
+    pg.wait_for_selector('[data-testid="nearby-stop"][data-on="true"]', timeout=8000)
+    me = api(ctx, 8801, uid4, 'GET', '/api/me'); rt_ = me['transit'].get('retry') or {}
+    check('[환승] [이 정류장] → 서버: 정류장 직행(정릉시장 08901 · 걸어서 3분 칩) · 다시 찾을 출발지 기억(정릉시장 · cap) · 고른 경로는 남김', me['transit']['mode'] == 'direct' and me['stop']['arsId'] == '08901'
+          and me['prefs']['walkToStopMin'] == 3 and (rt_.get('origin') or {}).get('name') == '정릉시장' and rt_.get('reason') == 'cap' and me['transit']['route']['title'] == '2호선 → 4호선 → 171', str(rt_)[:160])
+    note = pg.get_by_test_id('transit-fallback-note')
+    check('[환승] 출발지 칸: 환승 경로를 찾지 못해 가까운 정릉시장 정류장 직행 중', note.count() == 1 and '환승 경로를 찾지 못해' in note.inner_text() and '정릉시장' in note.inner_text())
     h = api(ctx, 8801, uid4, 'GET', '/api/health')
-    check('[환승] /api/health: odsay(오늘 3/3 · Referer) · seoulSubway(연결됨 · 호출 수) · 키 없음', h['odsay']['keyConfigured'] and h['odsay']['callsToday'] == 3 and h['odsay']['cap'] == 3
-          and h['odsay']['referer'] == 'https://ku-bus-ai.onrender.com' and h['seoulSubway']['keyConfigured'] and h['seoulSubway']['callsToday'] >= 1 and h['seoulSubway']['lastOkAt']
-          and 'ODSAY+TEST' not in json.dumps(h) and 'SUBWAY-TEST-KEY' not in json.dumps(h), json.dumps({k: h['odsay'][k] for k in ('callsToday', 'cap', 'left')}))
+    check('[환승] /api/health: odsay(오늘 3/3 · Referer) · nearKu(400m · 찾음) · seoulSubway(연결됨 · 호출 수) · 키 없음', h['odsay']['keyConfigured'] and h['odsay']['callsToday'] == 3 and h['odsay']['cap'] == 3
+          and h['odsay']['referer'] == 'https://ku-bus-ai.onrender.com' and h['nearKu']['radiusM'] == 400 and h['nearKu']['finds'] >= 1
+          and h['seoulSubway']['keyConfigured'] and h['seoulSubway']['callsToday'] >= 1 and h['seoulSubway']['lastOkAt']
+          and 'ODSAY+TEST' not in json.dumps(h) and 'SUBWAY-TEST-KEY' not in json.dumps(h) and 'E2E-TEST-KEY' not in json.dumps(h), json.dumps({k: h['odsay'][k] for k in ('callsToday', 'cap', 'left')}))
     pg.wait_for_timeout(300)
     ods = flat(pg.get_by_test_id('odsay-status').inner_text()); sbs = flat(pg.get_by_test_id('subway-status').inner_text())
     check('[환승] 설정 · 데이터 연결: 환승 경로(ODsay) 오늘 3회 다 씀 · 실시간 지하철 연결됨', ods == '오늘 3회 다 씀' and sbs.startswith('연결됨'), f'{ods} / {sbs}')
-    pg.get_by_test_id('transit-settings').get_by_role('radio', name='단일 정류장 직행').click()
-    pg.wait_for_selector('[data-testid="transit-settings"][data-mode="direct"]', timeout=8000)
+    # 홈: 가까운 정류장 직행 + [경로 다시 찾기]
     pg.evaluate("location.hash = '#home'")
-    pg.get_by_text('어느 정류장에서 버스를 타세요?').wait_for(timeout=8000)
-    check('[환승] 직행으로 바꾸면 v1.0 화면 그대로(정류장 고르기) · 서버도 직행', pg.get_by_test_id('origin-chip').count() == 0 and api(ctx, 8801, uid4, 'GET', '/api/me')['transit']['mode'] == 'direct')
+    rn = pg.get_by_test_id('retry-notice'); rn.wait_for(timeout=8000)
+    pg.locator('section[aria-label="실시간 버스 도착"]').wait_for(timeout=8000)
+    check('[환승] 홈: 정릉시장 직행(실시간 버스 카드) + 경로 다시 찾기 줄', '정릉시장' in rn.inner_text() and pg.get_by_test_id('origin-chip').count() == 0, flat(rn.inner_text()))
+    pg.screenshot(path=str(OUT / 'live_iphone13_retry_home.png'))
+    pg.get_by_test_id('retry-search').click()
+    fbk = pg.get_by_test_id('transit-fallback'); fbk.wait_for(timeout=8000)
+    pg.wait_for_selector('[data-testid="nearby-stop"][data-on="true"]', timeout=8000)
+    check('[환승] [경로 다시 찾기] → 설정에서 정릉시장으로 바로 다시 찾음(아직 한도 초과) · 지금 정류장은 안내 중 · 호출 수 그대로', pg.evaluate('location.hash') == '#settings'
+          and fbk.get_attribute('data-reason') == 'cap' and pg.get_by_test_id('nearby-apply').count() == 0 and api(ctx, 8801, uid4, 'GET', '/api/health')['odsay']['callsToday'] == 3)
+    # 고급 · 정류장 직행 스위치: 끄면 저장한 환승 경로로('경로 다시 찾기'는 끝) · 켜면 직행
+    adv = pg.get_by_test_id('advanced')
+    if adv.get_attribute('data-open') != 'true': pg.get_by_test_id('advanced-open').click()
+    sw = pg.get_by_test_id('direct-switch').get_by_role('switch')
+    check('[환승] 고급: 탑승 정류장 정릉시장 · 정류장 직행 스위치 켜짐', sw.get_attribute('aria-checked') == 'true' and '정릉시장' in flat(pg.get_by_test_id('stop-row').inner_text()))
+    sw.click()
+    trs = {}
+    for _ in range(30):
+        trs = api(ctx, 8801, uid4, 'GET', '/api/me')['transit']
+        if trs['mode'] == 'transit': break
+        pg.wait_for_timeout(100)
+    check('[환승] 스위치 끄기 → 저장한 환승 경로로 · 경로 다시 찾기 끝(서버 retry 지움)', trs['mode'] == 'transit' and trs.get('retry') is None, str(trs.get('retry')))
+    pg.evaluate("location.hash = '#home'")
+    pg.get_by_test_id('origin-chip').wait_for(timeout=8000)
+    check('[환승] 홈: 다시 환승 경로(출발지 칩) · 경로 다시 찾기 줄 없음', pg.get_by_test_id('retry-notice').count() == 0)
+    pg.evaluate("location.hash = '#settings'")
+    adv = pg.get_by_test_id('advanced'); adv.wait_for(timeout=5000)
+    if adv.get_attribute('data-open') != 'true': pg.get_by_test_id('advanced-open').click()
+    pg.get_by_test_id('direct-switch').get_by_role('switch').click()
+    pg.get_by_test_id('transit-direct-note').wait_for(timeout=5000)
+    pg.evaluate("location.hash = '#home'")
+    pg.locator('section[aria-label="실시간 버스 도착"]').wait_for(timeout=8000)
+    check('[환승] 스위치 켜기 → 직행 홈(정릉시장) · 서버도 직행 · 경로 다시 찾기 줄 없음', pg.get_by_test_id('origin-chip').count() == 0 and pg.get_by_test_id('retry-notice').count() == 0
+          and api(ctx, 8801, uid4, 'GET', '/api/me')['transit']['mode'] == 'direct')
     check('[환승] 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
 
@@ -406,10 +463,10 @@ with sync_playwright() as p:
     pg = ctx.new_page(); errs = []
     pg.on('pageerror', lambda e: errs.append(str(e)))
     pg.clock.install(time=T0); pg.goto('http://localhost:8802/')
-    pg.get_by_text('어느 정류장에서 버스를 타세요?').wait_for(timeout=10000)
-    pg.locator('input[type="search"]').fill('정릉')
+    onb = pg.get_by_test_id('onboarding'); onb.wait_for(timeout=10000)
+    onb.locator('input[type="search"]').fill('정릉')
     pg.wait_for_selector('text=서울시 버스 API 키가 없어', timeout=8000)
-    check('키 없음: 정류장 검색 이유 안내', True)
+    check('키 없음: 처음 화면 출발지 검색(정류장 이름) 이유 안내', True)
     api(ctx, 8802, uid2, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
     pg.reload()
     pg.wait_for_selector('[data-testid="fallback-notice"]', timeout=10000)
@@ -444,19 +501,24 @@ with sync_playwright() as p:
     pg.locator('section[aria-label="수업 검색"] input[type="search"]').fill('회로')
     pg.wait_for_selector('text=fetch_courses.py', timeout=5000)
     check('강의 목록이 없는 서버: 수업 검색 안내(fetch_courses.py)', '강의 목록이 아직 없어요' in pg.locator('[data-testid="course-meta"]').inner_text())
-    # v2.0 키 없는 서버(ODsay · 지하철 키 없음): 환승 경로 검색은 오류 대신 직행 안내 · 설정 상태는 꺼짐
+    # v2.1 키 없는 서버(ODsay · 지하철 · 서울시 버스 키 없음): 출발지 검색은 오류 대신 이유 · 근처 정류장도 지어내지 않음 · 설정 상태는 꺼짐
     ctx.grant_permissions(['geolocation'], origin='http://localhost:8802'); ctx.set_geolocation({'latitude': 37.557527, 'longitude': 126.923778})
     pg.get_by_role('link', name='설정').first.click()
-    pg.get_by_test_id('transit-settings').get_by_role('radio', name='출발지 환승 경로').click()
+    check('키 없음: v2.1 설정 출발지 칸(출발 방식 고르기 없음 · GPS 바로) · 정릉시장 직행 중 안내', pg.get_by_test_id('transit-settings').get_by_role('radio').count() == 0
+          and pg.get_by_test_id('transit-gps').count() == 1 and pg.get_by_test_id('transit-direct-note').count() == 1)
     pg.get_by_test_id('transit-gps').click()
     fbk = pg.get_by_test_id('transit-fallback'); fbk.wait_for(timeout=8000)
-    check('키 없음: 환승 경로 검색 → 오류 대신 직행 안내(ODSAY_API_KEY 없음)', fbk.get_attribute('data-reason') == 'no-key' and 'ODSAY_API_KEY' in fbk.inner_text() and '직행' in fbk.inner_text(), flat(fbk.inner_text())[:120])
+    pg.get_by_test_id('nearby-none').wait_for(timeout=8000)
+    ftx = flat(fbk.inner_text())
+    check('키 없음: 출발지 검색 → 오류 대신 ODSAY_API_KEY 없음 · 직행 약속 없음 · 근처 정류장은 확인하지 못함(지어내지 않음) · 큰 환승역 안내 없음', fbk.get_attribute('data-reason') == 'no-key' and 'ODSAY_API_KEY' in ftx
+          and '직행' not in ftx and '근처 버스 정류장을 확인하지 못했어요' in ftx and pg.get_by_test_id('nearby-stops').count() == 0 and pg.get_by_test_id('bigstation-tip').count() == 0, ftx[:160])
     ods = flat(pg.get_by_test_id('odsay-status').inner_text()); sbs = flat(pg.get_by_test_id('subway-status').inner_text())
     check('키 없음: 설정 환승 경로 · 실시간 지하철 = 꺼짐', ods == '꺼짐' and sbs == '꺼짐' and pg.get_by_text('SEOUL_SUBWAY_KEY가 없어').count() == 1, f'{ods} / {sbs}')
     h2 = api(ctx, 8802, uid2, 'GET', '/api/health')
-    check('키 없음: /api/health odsay · seoulSubway 꺼짐', h2['odsay']['keyConfigured'] is False and h2['seoulSubway']['keyConfigured'] is False)
+    check('키 없음: /api/health odsay · seoulSubway 꺼짐 · 근처 정류장 찾기(nearKu) 있음', h2['odsay']['keyConfigured'] is False and h2['seoulSubway']['keyConfigured'] is False and h2['nearKu']['radiusM'] == 400)
     pg.get_by_role('link', name='홈').first.click(); pg.wait_for_timeout(500)
-    check('키 없음: 경로를 고르기 전 환승 모드 → 홈은 직행 그대로 + 경로 고르기 안내', pg.get_by_test_id('transit-pending').count() == 1 and pg.locator('section[aria-label="출발 추천"][data-source="mock"]').count() == 1)
+    check('키 없음: 경로를 못 찾아도 홈은 고른 정류장 직행 그대로(예시 데이터 점선) · 경로 다시 찾기 · 경로 고르기 줄 없음', pg.get_by_test_id('retry-notice').count() == 0 and pg.get_by_test_id('transit-pending').count() == 0
+          and pg.locator('section[aria-label="출발 추천"][data-source="mock"]').count() == 1)
     check('키 없음: 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close(); b.close()
 
