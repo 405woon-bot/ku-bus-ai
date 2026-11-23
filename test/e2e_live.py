@@ -355,6 +355,11 @@ with sync_playwright() as p:
     me = api(ctx, 8801, uid4, 'GET', '/api/me')
     check('[환승] [이 경로로 안내 설정] → 서버(외부 DB)에 저장 · 처음 화면에서 바로 환승 홈', me['transit']['mode'] == 'transit' and me['transit']['route']['title'] == '2호선 → 4호선 → 171'
           and me['transit']['origin']['name'] == 'GPS로 고른 위치' and pg.get_by_test_id('onboarding').count() == 0, f"{me['transit']['mode']} {me['transit']['route']['title']}")
+    o_ = me['transit']['origin']
+    hl = api(ctx, 8801, uid4, 'GET', '/api/health')['location']
+    check('[v2.2.3] GPS 출발지는 약 100m 칸으로 저장(37.557527 → 37.558 · 126.923778 → 126.924) · health: 정밀한 GPS 출발지 0 · 예전 기록 옮기기 끝(좌표 값 없음)',
+          (o_['lat'], o_['lon'], o_['kind']) == (37.558, 126.924, 'gps') and hl['digits'] == 3 and hl['users']['gps'] >= 1 and hl['users']['precise'] == 0
+          and hl['migration']['done'] is True and '37.55' not in json.dumps(hl), f"{o_} {hl}")
     pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('갱신')", timeout=10000)
     live = api(ctx, 8801, uid4, 'GET', '/api/transit/live')
     plan = api(ctx, 8801, uid4, 'GET', '/api/plan')

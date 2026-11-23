@@ -161,11 +161,14 @@ export function createStore(file, { remote = null, log = console, clock = () => 
       u.prefs = { ...d.prefs, ...u.prefs };
       return u;
     },
-    update(id, fn) {
+    /**
+     * 사용자 기록 바꾸기 · 저장 예약.
+     *   touch:false = 사용자가 한 일이 아닌 정리(v2.2.3 좌표 칸 옮기기): 마지막으로 바뀐 시각(updatedAt)도, 기록 줄이기(tidyUser)도 하지 않고 fn이 바꾼 것만 저장
+     */
+    update(id, fn, { touch = true } = {}) {
       const u = this.user(id);
       fn(u);
-      u.updatedAt = clock();
-      tidyUser(u);
+      if (touch) { u.updatedAt = clock(); tidyUser(u); }
       markDirty(id);
       return u;
     },

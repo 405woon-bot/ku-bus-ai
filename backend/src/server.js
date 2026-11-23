@@ -29,6 +29,8 @@ import { createNearKuFinder } from './transit/nearKu.js';
 import { createOdsayWarmer } from './transit/odsayWarm.js';
 import { NEARBY_REASONS, fallbackText, routeKey } from '../../shared/transitPlan.js';
 import { SHARED_ID, idKind } from '../../shared/userId.js';
+import { COARSE_DIGITS, coarseOrigin } from '../../shared/geoPrivacy.js';
+import { createCoordMigration, userCoordStats } from './coords.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
@@ -82,7 +84,7 @@ function validClass(c, i) {
  * nearKu = createNearKuFinder() — v2.1 경로를 못 찾을 때 출발지 400m 안의 국민대행 정류장(없으면 이 안내 없음)
  * warmer = createOdsayWarmer() — v2.1 밤에 주요 환승역 경로 미리 찾기(상태 표시용, 실행은 스케줄러)
  */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, nearKu = null, warmer = null }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, nearKu = null, warmer = null, coords = null }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -115,6 +117,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       seoulSubway: subway?.health?.() ?? { keyConfigured: false },
       nearKu: nearKu?.health?.() ?? null,
       identity: identityHealth(store, idStats),
+      // v2.2.3 위치 저장 정밀도: GPS 출발지 수 · 아직 칸보다 정밀한 수(0이어야 함) · 예전 기록을 옮긴 결과(좌표 값은 싣지 않음)
+      location: { digits: COARSE_DIGITS, users: userCoordStats(store), migration: coords?.health?.() ?? null },
     });
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));
@@ -268,7 +272,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       const hit = odsay ? await odsay.byId(clean(b.searchId, 120)) : null;
       const route = hit?.paths?.find((p) => p.id === clean(b.pathId, 8));
       if (!route) return res.status(404).json({ error: '검색 결과가 만료됐어요. 출발지를 다시 검색해 주세요' });
-      store.update(req.userId, (u) => { u.transit = { mode: 'transit', origin: hit.origin, route, savedAt: now().toISOString() }; });
+      // v2.2.3 GPS 출발지는 약 100m 칸으로 저장(예전에 정밀하게 저장된 검색 결과를 골라도)
+      store.update(req.userId, (u) => { u.transit = { mode: 'transit', origin: coarseOrigin(hit.origin), route, savedAt: now().toISOString() }; });
       return res.json({ ok: true, transit: store.user(req.userId).transit });
     }
     // v2.1 경로를 못 찾아 근처 국민대행 정류장으로 직행 안내: 정류장 · 걷는 시간을 저장하고, 다시 찾을 출발지를 기억(retry)
@@ -276,7 +281,7 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       const s = b.fallbackStop, arsId = clean(s.arsId, 10);
       if (!ARS_ID.test(arsId)) return res.status(400).json({ error: '정류장 번호(arsId)는 숫자 5자리예요' });
       const o = b.origin || {}, olat = Number(o.lat), olon = Number(o.lon);
-      const origin = Number.isFinite(olat) && Number.isFinite(olon) ? { name: clean(o.name, 40) || '출발지', lat: olat, lon: olon, kind: o.kind === 'gps' ? 'gps' : 'stop', arsId: ARS_ID.test(clean(o.arsId, 10)) ? clean(o.arsId, 10) : '' } : null;
+      const origin = Number.isFinite(olat) && Number.isFinite(olon) ? coarseOrigin({ name: clean(o.name, 40) || '출발지', lat: olat, lon: olon, kind: o.kind === 'gps' ? 'gps' : 'stop', arsId: ARS_ID.test(clean(o.arsId, 10)) ? clean(o.arsId, 10) : '' }) : null; // v2.2.3 GPS면 약 100m 칸
       const walk = Number(s.walkMin);
       store.update(req.userId, (u) => {
         if (u.stop?.arsId !== arsId) u.fired = {};
@@ -499,18 +504,21 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   // v2.1 경로를 못 찾을 때 근처 국민대행 정류장 · 밤에 주요 환승역 경로 미리 찾기(스케줄러가 1분마다 한 곳씩)
   const nearKu = createNearKuFinder({ provider, clock: () => now().getTime() });
   const warmer = createOdsayWarmer({ env, odsay, provider, clock: () => now().getTime() });
+  // v2.2.3 예전에 정밀하게 저장된 GPS 출발지(사용자 기록 · ODsay 검색 결과)를 약 100m 칸으로 — 저장소를 다 읽은 뒤 한 번
+  const coords = createCoordMigration({ store, odsay, clock: () => now().getTime() });
+  coords.start();
   const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label', subway, warmer });
   const courses = loadCourses(env.COURSES_FILE || undefined);
   const incidents = createAccidentService({ env, clock: () => now().getTime() });
   const weather = createWeatherService({ env, clock: () => now().getTime() });
   const explainer = createExplainService({ env, clock: () => now().getTime() });
-  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway, nearKu, warmer });
+  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway, nearKu, warmer, coords });
   const port = Number(env.PORT) || 8787;
   const h = provider.health(), ih = incidents.health(), wh = weather.health(), eh = explainer.health(), si = store.info();
   app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건 · 미리 찾기 ${warmer.health().list}곳 ${warmer.health().hours})` : 'ODSAY_API_KEY 없음 → 근처 국민대행 정류장 안내'}, 실시간 지하철: ${subway.keyConfigured ? '서울시' : '키 없음 → 표준 대기'}, 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
   // Render가 서버를 멈출 때(잠들기 · 재배포) 아직 저장 안 된 기록을 마저 저장
-  const bye = () => { scheduler.stop(); store.flush().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };
+  const bye = () => { scheduler.stop(); coords.stop(); store.flush().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };
   process.once('SIGTERM', bye);
   process.once('SIGINT', bye);
 }

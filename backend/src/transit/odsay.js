@@ -5,7 +5,10 @@
 //   · 같은 출발지(이름이 같고 1km 안 · 또는 300m 안)는 외부 DB에 저장한 결과를 모든 사용자가 같이 씀(호출 안 함)
 //   · v2.1 저장 기간: 30일 동안은 '새 결과', 90일까지 남겨 두고 한도 초과 · 키 없음 · ODsay 오류 때만 '예전 경로'(날짜 표시)로 씀
 //   · 한도 초과 · 키 없음 · 오류는 예외 대신 { ok:false, fallback:'direct', reason } → 화면이 근처 국민대행 정류장 · 안내로 넘어감
+//   · v2.2.3 GPS 출발지는 약 100m 칸(소수 셋째 자리)으로 저장 · 응답(키도 g:칸). ODsay에 묻는 순간에만 정확한 좌표를 쓰고 저장하지 않음.
+//     예전에 정밀하게 저장한 GPS 항목은 coarsenGps()가 같은 칸으로 옮김(경로 · 보관 기한은 그대로)
 import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, parseOdsayResult, staleText } from '../../../shared/transitPlan.js';
+import { coarseOrigin, gpsKey, isCoarse } from '../../../shared/geoPrivacy.js';
 import { seoulParts } from '../../../shared/time.js';
 
 const BASE = 'https://api.odsay.com/v1/api/searchPubTransPathT';
@@ -13,6 +16,7 @@ const DAY = 86400;
 const FRESH_SEC = 30 * DAY;        // 경로 검색 결과: 이 기간은 '새 결과'로 바로 씀
 const KEEP_SEC = 90 * DAY;         // v2.1 그 뒤 90일까지는 지우지 않고, 새로 찾을 수 없을 때만 '예전 경로'로
 const EMPTY_TTL_SEC = 7 * DAY;     // '경로 없음'도 7일 기억(같은 곳에서 다시 호출하지 않게) — 예전 값으로는 쓰지 않음
+const OLD_GRACE_SEC = 600;         // v2.2.3 칸으로 옮긴 예전 GPS 항목: 열려 있던 화면이 그 검색 번호로 저장할 수 있게 10분만 더 남김
 const IDX = 'kubusai:odsay:idx';
 const RES = (k) => `kubusai:odsay:r:${k}`;
 const CNT = (d) => `kubusai:odsay:calls:${d}`;
@@ -144,17 +148,19 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
       return { ok: false, fallback: 'direct', reason, message: fallbackText(reason, cap), calls: calls(), ...extra };
     };
     if (!(Number(lat) >= 33 && Number(lat) <= 39 && Number(lon) >= 124 && Number(lon) <= 132)) return fb('bad');
-    const origin = { name: String(name || '').trim().slice(0, 40) || (kind === 'gps' ? 'GPS로 고른 위치' : '출발지'), lat: r6(Number(lat)), lon: r6(Number(lon)), kind: kind === 'gps' ? 'gps' : 'stop', arsId: /^\d{5}$/.test(String(arsId)) ? String(arsId) : '' };
-    const distM = Math.round(distanceM({ x: origin.lon, y: origin.lat }, KOOKMIN_GATE));
+    // exact = 지금 묻는 위치(ODsay 요청 · 같은 곳 찾기 · 거리 계산에만, 저장하지 않음) · origin = 저장 · 응답용(GPS면 약 100m 칸)
+    const exact = { name: String(name || '').trim().slice(0, 40) || (kind === 'gps' ? 'GPS로 고른 위치' : '출발지'), lat: r6(Number(lat)), lon: r6(Number(lon)), kind: kind === 'gps' ? 'gps' : 'stop', arsId: /^\d{5}$/.test(String(arsId)) ? String(arsId) : '' };
+    const origin = coarseOrigin(exact);
+    const distM = Math.round(distanceM({ x: exact.lon, y: exact.lat }, KOOKMIN_GATE));
     if (distM < TRANSIT.nearMinM) return fb('near', { distM });
     const nameOf = (hit) => (origin.kind === 'gps' ? hit.origin.name : origin.name);
     let old = null; // 예전 경로(30~90일): 새로 찾을 수 없을 때만
     try {
-      const hit = await findCached(origin);
+      const hit = await findCached(exact);
       if (hit && !hit.stale) {
         state.hits++;
         if (!hit.v.paths?.length) return fb(hit.v.reason || 'no-path', { cached: true });
-        return { ok: true, cached: true, searchId: hit.v.key, origin: { ...hit.v.origin, name: nameOf(hit.v) }, paths: hit.v.paths, at: hit.v.at, calls: calls() };
+        return { ok: true, cached: true, searchId: hit.v.key, origin: coarseOrigin({ ...hit.v.origin, name: nameOf(hit.v) }), paths: hit.v.paths, at: hit.v.at, calls: calls() };
       }
       if (hit?.stale) old = hit;
     } catch (e) { noteErr('store', `저장된 검색 결과를 읽지 못했어요: ${e.message}`); }
@@ -162,7 +168,7 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
       if (!old || !STALE_OK.has(reason)) return fb(reason, extra);
       state.staleServed++; state.lastFallback = { reason, at: clock(), stale: true };
       return { ok: true, cached: true, stale: true, staleReason: reason, ageDays: old.ageDays, message: staleText(reason, old.ageDays, cap),
-        searchId: old.v.key, origin: { ...old.v.origin, name: nameOf(old.v) }, paths: old.v.paths, at: old.v.at, calls: calls() };
+        searchId: old.v.key, origin: coarseOrigin({ ...old.v.origin, name: nameOf(old.v) }), paths: old.v.paths, at: old.v.at, calls: calls() };
     };
     if (!key) return useOld('no-key');
     let n;
@@ -170,10 +176,10 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
     state.date = today(); state.calls = Math.max(state.calls, n);
     if (n > cap) return useOld('cap');
     let json;
-    try { json = await request(origin); } catch (e) { noteErr('error', e.message); log.warn?.(`[odsay] ${redact(e.message)}`); return useOld('error'); }
+    try { json = await request(exact); } catch (e) { noteErr('error', e.message); log.warn?.(`[odsay] ${redact(e.message)}`); return useOld('error'); }
     state.lastShape = shapeOf(json);
     const r = parseOdsayResult(json);
-    const entryKey = origin.kind === 'gps' ? `g:${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}` : `n:${nameKey(origin.name)}:${origin.lat.toFixed(3)},${origin.lon.toFixed(3)}`;
+    const entryKey = origin.kind === 'gps' ? gpsKey(origin.lat, origin.lon) : `n:${nameKey(origin.name)}:${origin.lat.toFixed(3)},${origin.lon.toFixed(3)}`;
     const at = iso(clock());
     if (!r.ok) {
       const reason = r.error.code === 'format' ? 'error' : odsayReason(r.error);
@@ -184,6 +190,44 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
     state.lastOkAt = clock();
     try { await save({ key: entryKey, origin, paths: r.paths, at }, FRESH_SEC, KEEP_SEC); } catch (e) { noteErr('store', `검색 결과를 저장하지 못했어요: ${e.message}`); }
     return { ok: true, cached: false, searchId: entryKey, origin, paths: r.paths, at, calls: calls() };
+  }
+
+  /**
+   * v2.2.3 예전에 정밀하게 저장한 GPS 출발지 항목(키 g:소수 넷째 자리 · 좌표 소수 여섯째 자리)을 약 100m 칸으로 옮김.
+   *   경로 · 검색 시각 · 보관 기한(exp) · 새 결과 기한(fresh, 없으면 v2.0 항목 그대로)은 바꾸지 않음. 역 · 정류장 항목(n:)은 건드리지 않음.
+   *   같은 칸에 같거나 더 새로운 결과가 이미 있으면 예전 것만 지움. 순서: 새 칸에 쓰기 → 목록에 넣기 → 예전 목록에서 빼기 →
+   *   예전 결과는 10분 뒤 사라지게. 중간에 실패해도 다시 돌리면 이어서 처리(이미 칸이면 건너뜀)
+   * @returns {Promise<{ gps, moved, merged, skipped }>}
+   */
+  async function coarsenGps() {
+    const raw = await kv.hgetall(IDX), t = clock(), out = { gps: 0, moved: 0, merged: 0, skipped: 0 };
+    const idx = {};
+    for (const [k, v] of Object.entries(raw)) { try { idx[k] = JSON.parse(v); } catch { /* 깨진 항목은 loadIndex가 정리 */ } }
+    for (const k of Object.keys(idx)) {
+      if (!k.startsWith('g:') || !idx[k]) continue;
+      out.gps++;
+      const e = idx[k], lat = Number(e.lat), lon = Number(e.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) { out.skipped++; continue; }
+      const nk = gpsKey(lat, lon);
+      if (nk === k && isCoarse(lat) && isCoarse(lon)) continue; // 이미 칸
+      if (!(e.exp > t)) { out.skipped++; continue; }            // 보관이 끝난 항목은 loadIndex가 지움
+      const v = await byId(k);
+      if (!v) { await kv.hdel(IDX, k); delete idx[k]; out.skipped++; continue; }
+      const cur = nk !== k ? idx[nk] : null;
+      if (cur && cur.exp > t && (cur.fresh ?? cur.exp) >= (e.fresh ?? e.exp)) { // 같은 칸에 같거나 더 새로운 결과
+        await kv.hdel(IDX, k); await kv.expire(RES(k), OLD_GRACE_SEC); delete idx[k]; out.merged++; continue;
+      }
+      const origin = coarseOrigin({ ...v.origin, kind: 'gps' });
+      const ttl = Math.max(1, Math.ceil((e.exp - t) / 1000));
+      await kv.set(RES(nk), JSON.stringify({ origin, paths: v.paths, reason: v.reason || null, at: v.at }), ttl);
+      const ix = { lat: origin.lat, lon: origin.lon, name: e.name, exp: e.exp, ...(e.fresh ? { fresh: e.fresh } : {}) };
+      await kv.hset(IDX, nk, JSON.stringify(ix));
+      idx[nk] = ix;
+      if (nk !== k) { await kv.hdel(IDX, k); await kv.expire(RES(k), OLD_GRACE_SEC); delete idx[k]; }
+      out.moved++;
+    }
+    state.index = null; // 목록을 다시 읽게
+    return out;
   }
 
   /** v2.1 미리 찾아 두기용: 이 이름(같은 이름 키)으로 저장된 '새 결과'가 언제까지 새것인지(ms, 없으면 0) · 경로 없음으로 기억했는지 */
@@ -208,6 +252,7 @@ export function createOdsayService({ env = process.env, kv, fetchImpl = globalTh
     cap,
     search,
     byId,
+    coarsenGps,
     freshness,
     usedToday,
     health() {

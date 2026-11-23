@@ -22,6 +22,7 @@ import { SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
 import { createKv } from '../src/transit/kv.js';
 import { createOdsayService } from '../src/transit/odsay.js';
 import { createNearKuFinder } from '../src/transit/nearKu.js';
+import { createCoordMigration } from '../src/coords.js';
 import { createSubwayService } from '../src/transit/seoulSubway.js';
 import { ODSAY_TEST_KEY, fakeOdsayFetch } from '../test/fixtures/odsayFixture.js';
 import { SUBWAY_TEST_KEY, fakeSubwayFetch } from '../test/fixtures/subwayFixture.js';
@@ -55,7 +56,10 @@ const odsay = createOdsayService({
 });
 const subway = createSubwayService({ env: { SEOUL_SUBWAY_KEY: SUBWAY_TEST_KEY }, fetchImpl: fakeSubwayFetch({ clock: () => now().getTime() }), clock: () => now().getTime(), log: quiet });
 const nearKu = createNearKuFinder({ provider: live, clock: () => now().getTime() });
-createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, odsay, subway, nearKu, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice }) })
+// v2.2.3 예전에 정밀하게 저장된 GPS 출발지 옮기기(실서비스처럼 켜질 때 한 번 — e2e 저장소는 비어 있어 옮길 것은 없음)
+const coords = createCoordMigration({ store: store8801, odsay, clock: () => now().getTime(), log: quiet });
+coords.start();
+createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, odsay, subway, nearKu, coords, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice }) })
   .listen(8801, () => console.log('fixture seoul server 8801'));
 const nokey = createLiveService({ env: {}, background: false, log: quiet });
 createApp({ store: createStore(null), provider: nokey, now, pusher: createPusher({}, quiet), nearKu: createNearKuFinder({ provider: nokey, clock: () => now().getTime() }), incidents: createAccidentService({ env: {}, clock: () => now().getTime() }), weather: createWeatherService({ env: {}, clock: () => now().getTime() }), explainer: createExplainService({ env: {}, clock: () => now().getTime() }) })
