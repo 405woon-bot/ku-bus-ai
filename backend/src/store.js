@@ -51,6 +51,8 @@ export const defaultUser = () => ({
   transit: { mode: 'direct', origin: null, route: null, savedAt: null, retry: null },
   // v2.2 '출발했어요!': 오늘 출발 기록 하나 { key(날짜:수업), at, departMin, routeKey } — 날짜 · 경로가 다르면 쓰지 않음(다음에 누르면 덮어씀)
   departure: null,
+  // v2.2.4 마지막 사용 시각(ms) — 화면 요청(12시간에 한 번) · 출발 알림 전달 · 알림 수신 확인. 이 시각부터 90일 지나면 자동 삭제(retention.js)
+  lastSeen: null,
   updatedAt: 0,
 });
 
@@ -84,7 +86,7 @@ export function createStore(file, { remote = null, log = console, clock = () => 
   if (!db.users) db.users = {};
   const st = {
     kind: remote ? remote.kind || 'remote' : file ? 'file' : 'memory', loaded: !remote, loadedAt: null, savedAt: null, saves: 0,
-    lastError: null, dirty: new Set(), saving: false, attempt: 0, timer: null, loadTimer: null,
+    lastError: null, dirty: new Set(), removed: new Set(), deletes: 0, saving: false, attempt: 0, timer: null, loadTimer: null,
   };
   const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
   const errInfo = (e) => ({ kind: e?.kind || 'error', message: String(e?.message || e).slice(0, 200), at: clock() });
@@ -104,22 +106,27 @@ export function createStore(file, { remote = null, log = console, clock = () => 
     st.timer.unref?.();
   }
   async function flush() {
-    if (!remote || !st.loaded || st.saving || !st.dirty.size) return;
+    if (!remote || !st.loaded || st.saving || (!st.dirty.size && !st.removed.size)) return;
     st.saving = true;
+    // v2.2.4 지울 사용자 먼저 — 그사이 다시 돌아와 새로 저장한 사용자는 아래 저장으로 새 기록이 남음
+    const gone = [...st.removed];
+    st.removed.clear();
     const ids = [...st.dirty];
     st.dirty.clear();
     try {
+      if (gone.length) { await remote.deleteMany(gone); st.deletes += gone.length; }
       await remote.saveMany(ids.filter((id) => db.users[id]).map((id) => [id, db.users[id]]));
       st.savedAt = clock(); st.saves++; st.attempt = 0;
       if (st.lastError?.op === 'save') st.lastError = null;
     } catch (e) {
+      for (const id of gone) st.removed.add(id);
       for (const id of ids) st.dirty.add(id);
       st.lastError = { ...errInfo(e), op: 'save' };
       log.warn?.(`[store] 저장 실패: ${st.lastError.message}`);
       st.attempt++;
     } finally {
       st.saving = false;
-      if (st.dirty.size) schedule(st.attempt ? retryMs[Math.min(st.attempt - 1, retryMs.length - 1)] : flushMs);
+      if (st.dirty.size || st.removed.size) schedule(st.attempt ? retryMs[Math.min(st.attempt - 1, retryMs.length - 1)] : flushMs);
     }
   }
   function markDirty(id) {
@@ -173,13 +180,27 @@ export function createStore(file, { remote = null, log = console, clock = () => 
       return u;
     },
     users() { return Object.entries(db.users); },
+    /** v2.2.4 있으면 그 기록, 없으면 undefined — 새로 만들지 않음(마지막 사용 기록 · 자동 삭제가 씀) */
+    peek(id) { return Object.prototype.hasOwnProperty.call(db.users, id) ? db.users[id] : undefined; },
+    /**
+     * v2.2.4 사용자 기록 지우기(90일 자동 삭제 · 내 데이터 지우기). 외부 DB에서도 지움(모아서, 실패하면 다시).
+     * @returns {boolean} 지웠으면 true · 없거나 외부 DB가 지우기를 못 하면 false
+     */
+    remove(id) {
+      if (!Object.prototype.hasOwnProperty.call(db.users, id)) return false;
+      if (remote && typeof remote.deleteMany !== 'function') return false;
+      delete db.users[id];
+      st.dirty.delete(id);
+      if (remote) { st.removed.add(id); if (st.loaded) schedule(flushMs); } else persistFile();
+      return true;
+    },
     /** 저장을 기다리는 것을 지금 저장(종료 · 테스트용) */
     async flush() { clearTimeout(st.timer); st.timer = null; await flush(); },
     /** /api/health용 — 주소 · 토큰은 싣지 않음 */
     info() {
       return {
         kind: st.kind, loaded: st.loaded, users: Object.keys(db.users).length, loadedAt: iso(st.loadedAt), savedAt: iso(st.savedAt),
-        saves: st.saves, pending: st.dirty.size, lastError: st.lastError && { ...st.lastError, at: iso(st.lastError.at) },
+        saves: st.saves, pending: st.dirty.size + st.removed.size, deleted: st.deletes, lastError: st.lastError && { ...st.lastError, at: iso(st.lastError.at) },
       };
     },
     stop() { clearTimeout(st.timer); clearTimeout(st.loadTimer); clearTimeout(fileTimer); },

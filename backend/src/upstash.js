@@ -89,5 +89,10 @@ export function upstashUsers(client, key = 'kubusai:users') {
       for (const [id, u] of entries) args.push(id, JSON.stringify(u));
       await client.cmd(...args);
     },
+    /** v2.2.4 사용자 기록 지우기(HDEL 한 번에 여럿) @param {string[]} ids */
+    async deleteMany(ids) {
+      if (!ids.length) return;
+      await client.cmd('HDEL', key, ...ids);
+    },
   };
 }

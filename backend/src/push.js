@@ -2,6 +2,7 @@
 //   키가 없거나 형식이 틀리면 발송하지 않고(서버는 멈추지 않음) 이유를 /api/health · 설정 화면에 보여 줍니다.
 import crypto from 'node:crypto';
 import webpush from 'web-push';
+import { SHARED_ID } from '../../shared/userId.js';
 
 /** 구독 주소(endpoint) → 화면에 보여 줄 짧은 기기 번호(주소 자체는 화면에 내보내지 않음) */
 export const deviceId = (endpoint) => crypto.createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 10);
@@ -106,6 +107,8 @@ export async function sendAndLog(store, userId, pusher, subs, payload, { kind, n
   const id = newAckId();
   const { results } = await pusher.deliver(subs, { ...payload, ack: id, kind }, ttl ? { ttl } : {});
   const ok = results.filter((r) => r.ok), bad = results.filter((r) => !r.ok);
+  const out = { id, sent: ok.length, failed: bad.map((r) => ({ status: r.status, message: r.message, skipped: Boolean(r.skipped) })), gone: results.filter((r) => r.gone).length };
+  if (store.peek && store.peek(userId) === undefined) return out; // v2.2.4 보내는 사이 지워진 사용자(90일 자동 삭제)는 기록을 다시 만들지 않음
   store.update(userId, (u) => {
     const gone = new Set(results.filter((r) => r.gone).map((r) => r.endpoint));
     u.push = u.push.filter((s) => !gone.has(s.endpoint));
@@ -115,6 +118,8 @@ export async function sendAndLog(store, userId, pusher, subs, payload, { kind, n
     }
     // 한 기기로만 보낸 알림(테스트)은 받은 기기를 알 수 있게 주소를 남김(서비스 워커가 주소를 못 보내도 그 기기를 '수신 확인됨'으로)
     u.pushLog = [...(u.pushLog || []), { id, kind, title: String(payload.title || '').slice(0, 80), sentAt: now, sent: ok.length, failed: bad.length, ackAt: null, ...(subs.length === 1 ? { to: subs[0].endpoint } : {}) }];
+    // v2.2.4 출발 알림이 휴대폰에 전달됨(알림 서버가 받음) = 이 사용자가 서비스를 쓰는 중 — 앱을 열지 않고 알림만 받는 사용자도 지워지지 않게
+    if (kind === 'alarm' && ok.length && userId !== SHARED_ID) u.lastSeen = now;
   });
-  return { id, sent: ok.length, failed: bad.map((r) => ({ status: r.status, message: r.message, skipped: Boolean(r.skipped) })), gone: results.filter((r) => r.gone).length };
+  return out;
 }

@@ -360,6 +360,10 @@ with sync_playwright() as p:
     check('[v2.2.3] GPS 출발지는 약 100m 칸으로 저장(37.557527 → 37.558 · 126.923778 → 126.924) · health: 정밀한 GPS 출발지 0 · 예전 기록 옮기기 끝(좌표 값 없음)',
           (o_['lat'], o_['lon'], o_['kind']) == (37.558, 126.924, 'gps') and hl['digits'] == 3 and hl['users']['gps'] >= 1 and hl['users']['precise'] == 0
           and hl['migration']['done'] is True and '37.55' not in json.dumps(hl), f"{o_} {hl}")
+    hr = api(ctx, 8801, uid4, 'GET', '/api/health')['retention']
+    check('[v2.2.4] 마지막 사용 기록(화면 요청) · health retention: 90일 · 켜짐 · 지금 지울 사람 0 · 멈춤 없음 · 다음 삭제 가능 시각은 90일 뒤(사용자 ID 없음)',
+          isinstance(me.get('lastSeen'), (int, float)) and hr['days'] == 90 and hr['on'] is True and hr['users'] >= 1 and hr['dueNow'] == 0 and hr['held'] is None
+          and hr['nextDueAt'] and uid4 not in json.dumps(hr), f"{me.get('lastSeen')} {hr}")
     pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('갱신')", timeout=10000)
     live = api(ctx, 8801, uid4, 'GET', '/api/transit/live')
     plan = api(ctx, 8801, uid4, 'GET', '/api/plan')

@@ -25,11 +25,13 @@ export function createScheduler({ store, provider, pusher, now = () => new Date(
         try {
           const { alarms, key, mockData } = await planFor(user, provider, now(), { windowMin, subway });
           if (!alarms.length) continue;
+          if (store.peek && store.peek(userId) === undefined) continue; // v2.2.4 계산하는 사이 지워진 사용자(90일 자동 삭제)
           if (mockData && pushWhenMock === 'skip') { stats.skippedMock += alarms.length; continue; }
           const main = alarms.find((a) => a.type === 'depart') || alarms.find((a) => a.type === 'earlier') || alarms[0];
           const tone = alarms.reduce((t, a) => ((SEVERITY[a.tone] || 0) > (SEVERITY[t] || 0) ? a.tone : t), main.tone);
           const body = mockData ? `${main.body}${MOCK_NOTE}` : main.body;
           const r = await sendAndLog(store, userId, pusher, user.push, { title: main.title, body, tag: `${key}:${main.type}`, level: tone, url: '/', source: mockData ? 'mock' : 'seoul' }, { kind: 'alarm', now: now().getTime() });
+          if (store.peek && store.peek(userId) === undefined) continue; // v2.2.4 보내는 사이 지워짐 → 기록을 다시 만들지 않음
           store.update(userId, (u) => {
             const rec = u.fired[key] || (u.fired[key] = {});
             for (const a of alarms) { if (a.type === 'earlier') rec.depart = { departMin: a.departMin }; else rec[a.type] = { departMin: a.departMin }; }
