@@ -144,6 +144,38 @@ test('근처 국민대행 정류장: 서울시 내 주변 정류장(400m) → �
   provider.stop?.();
 });
 
+test('근처 국민대행 정류장(v2.3): 일시적으로 확인 못 한 정류장 결과는 6시간 기억하지 않음 · 하나도 못 찾으면 "없음"이 아니라 "확인 못 함"', async () => {
+  const clock = { ms: Date.parse('2026-11-23T08:00:00+09:00') };
+  const calls = [];
+  let down = true; // 서울시가 일시적으로 안 될 때
+  const provider = {
+    nearStops: async () => [{ arsId: '08901', name: '정릉시장', lat: 37.6, lon: 127.0, distM: 120 }, { arsId: '08902', name: '정릉동', lat: 37.6, lon: 127.0, distM: 200 }],
+    stopTrips: async (arsId) => { calls.push(arsId); return down ? { source: 'mock', reason: 'timeout', trips: [] } : { source: 'seoul', trips: [{ no: '171' }] }; },
+  };
+  const finder = createNearKuFinder({ provider, clock: () => clock.ms });
+  const bad = await finder.find(37.6, 127.0);
+  assert.deepEqual([bad.ok, bad.reason, bad.stops], [false, 'api', []], '모두 확인 못 하면 없다고 하지 않음');
+  const n = calls.length;
+  await finder.find(37.6, 127.0);
+  assert.equal(calls.length, n, '1분 안에는 다시 부르지 않음(연타 방지)');
+  // 1분 뒤 서울시가 살아나면 6시간을 기다리지 않고 바로 다시 확인
+  clock.ms += 61_000; down = false;
+  const good = await finder.find(37.6, 127.0);
+  assert.deepEqual([good.ok, good.stops.map((x) => x.arsId)], [true, ['08901', '08902']]);
+  assert.ok(calls.length > n);
+  // 이번엔 정상 결과 → 6시간 기억
+  const m = calls.length;
+  clock.ms += 3600_000; await finder.find(37.6, 127.0);
+  assert.equal(calls.length, m, '정상 결과는 6시간 기억');
+  clock.ms += 6 * 3600_000; await finder.find(37.6, 127.0);
+  assert.ok(calls.length > m, '6시간이 지나면 다시 확인');
+  // 일부만 확인 못 한 경우: 찾은 것은 보여 주되 오래 기억하지 않음
+  const mixed = createNearKuFinder({ provider: { nearStops: provider.nearStops, stopTrips: async (id) => (id === '08901' ? { source: 'seoul', trips: [{ no: '171' }] } : { source: 'mock', reason: 'api', trips: [] }) }, clock: () => clock.ms });
+  const p = await mixed.find(37.6, 127.0);
+  assert.deepEqual([p.ok, p.stops.map((x) => x.arsId)], [true, ['08901']]);
+  assert.equal(mixed.health().partial, 1);
+});
+
 async function serve({ cap = '1', withOdsay = true } = {}, fn) {
   const clock = { t: kst('2026-11-16T07:00:00') };
   const nowMs = () => clock.t.getTime();
