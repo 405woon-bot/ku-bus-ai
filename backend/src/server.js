@@ -28,12 +28,27 @@ import { transitLive } from './transit/transitLive.js';
 import { createNearKuFinder } from './transit/nearKu.js';
 import { createOdsayWarmer } from './transit/odsayWarm.js';
 import { NEARBY_REASONS, fallbackText, routeKey } from '../../shared/transitPlan.js';
+import { SHARED_ID, idKind } from '../../shared/userId.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 const HANDOFF_MS = 2 * 3600_000; // 홈 화면 앱 이어받기 코드 유효 시간(한 번만 쓰임)
 const DEPART_WINDOW_MIN = 240; // v2.2 '출발했어요!'를 받는 시간: 오늘 첫 수업 시작 4시간 전 ~ 시작 전(화면은 추천 출발 1시간 전부터 버튼을 보여 줌)
 const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+/**
+ * v2.2.2 /api/health 'identity': 사용자 ID 종류별 개수(긴 새 ID · 예전 8자 · 그 밖)와 공용 'demo' 기록의 크기만 — ID 값 · 내용은 싣지 않음.
+ *   배포 뒤 새 브라우저로 앱을 열면 users.long이 늘고, demoHeader(‘demo’로 온 요청 수)는 그대로 0이어야 함
+ */
+function identityHealth(store, st) {
+  const users = { long: 0, short: 0, other: 0 };
+  let demoUser = null;
+  for (const [id, u] of store.users()) {
+    const k = idKind(id);
+    if (k === 'demo') demoUser = { classes: u.classes?.length || 0, push: u.push?.length || 0, saved: Boolean(u.updatedAt) };
+    else users[k]++;
+  }
+  return { users, demoUser, demoHeader: st.demoHeader, demoHeaderLastAt: iso(st.demoHeaderLastAt) };
+}
 /**
  * '도착했어요!'를 누른 시각(ms): 휴대폰 시계가 서버와 2분 안이면 누른 시각(pressedAt) 그대로 —
  * 서버가 잠에서 깨는 동안 늦게 받거나 연결이 끊겨 나중에 다시 보내도 정확. 시계가 틀린 휴대폰이면
@@ -71,7 +86,15 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
-  app.use((req, _res, next) => { req.userId = clean(req.get('x-user-id') || 'demo', 64); next(); });
+  //   v2.2.2 점검용: 화면이 'demo'를 사용자 ID로 보낸 요청 수 — 예전 화면은 저장 공간이 막히면 모두 'demo'를 같이 썼고,
+  //   새 화면은 보내지 않음(동작은 예전과 같고 세기만 함. 헤더 없는 요청 · 서비스 워커 요청은 세지 않음)
+  const idStats = { demoHeader: 0, demoHeaderLastAt: null };
+  app.use((req, _res, next) => {
+    const h = req.get('x-user-id');
+    req.userId = clean(h || 'demo', 64);
+    if (h != null && clean(h, 64) === SHARED_ID) { idStats.demoHeader++; idStats.demoHeaderLastAt = now().getTime(); }
+    next();
+  });
   // 외부 DB(Upstash)에서 사용자 기록을 다 읽기 전에는 /api 요청을 잠깐 기다리게 함(빈 기록으로 덮어쓰지 않게)
   app.use('/api', (_req, _res, next) => { Promise.resolve(store.ready).then(() => next(), () => next()); });
   const upSince = new Date().toISOString();
@@ -91,6 +114,7 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
       odsay: odsay?.health ? { ...odsay.health(), warm: warmer?.health?.() ?? null } : { keyConfigured: false },
       seoulSubway: subway?.health?.() ?? { keyConfigured: false },
       nearKu: nearKu?.health?.() ?? null,
+      identity: identityHealth(store, idStats),
     });
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));

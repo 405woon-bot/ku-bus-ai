@@ -541,7 +541,53 @@ with sync_playwright() as p:
     check('키 없음: 경로를 못 찾아도 홈은 고른 정류장 직행 그대로(예시 데이터 점선) · 경로 다시 찾기 · 경로 고르기 줄 없음', pg.get_by_test_id('retry-notice').count() == 0 and pg.get_by_test_id('transit-pending').count() == 0
           and pg.locator('section[aria-label="출발 추천"][data-source="mock"]').count() == 1)
     check('키 없음: 페이지 오류 없음', not errs, str(errs)[:200])
-    ctx.close(); b.close()
+    ctx.close()
+
+    # ⑦ v2.2.2 사용자 ID(키 없는 서버 8802): 새 기기는 긴 무작위 ID · 예전 8자 ID는 그대로 ·
+    #    저장 공간(localStorage)이 막혀도 'demo'(예전에 막힌 기기들이 같이 쓰던 값)가 아니라 이 기기만의 ID
+    BLOCK_LS = "Object.defineProperty(window, 'localStorage', { configurable: true, get: function () { throw new DOMException('The operation is insecure.', 'SecurityError'); } });"
+    BLOCK_COOKIE = "Object.defineProperty(Document.prototype, 'cookie', { configurable: true, get: function () { throw new DOMException('blocked', 'SecurityError'); }, set: function () { throw new DOMException('blocked', 'SecurityError'); } });"
+    LONG = re.compile(r'^u[0-9a-f]{32}$')
+    def open_ids(init=None, reload=False):
+        c = b.new_context(viewport={'width': 1200, 'height': 900})
+        if init: c.add_init_script(init)
+        pg = c.new_page(); errs = []; seen = []
+        pg.on('pageerror', lambda e: errs.append(str(e)))
+        pg.on('request', lambda r: seen.append(r.headers.get('x-user-id', '')) if '/api/' in r.url else None)
+        pg.goto('http://localhost:8802/'); pg.get_by_test_id('onboarding').wait_for(timeout=10000); pg.wait_for_timeout(800)
+        first = list(seen); again = []
+        if reload:
+            seen.clear(); pg.reload(); pg.get_by_test_id('onboarding').wait_for(timeout=10000); pg.wait_for_timeout(800); again = list(seen)
+        return c, pg, errs, first, again
+    cookie_of = lambda c: next((k['value'] for k in c.cookies() if k['name'] == 'kubusai_uid'), None)
+    c, pg, errs, first, _ = open_ids()
+    stored = pg.evaluate("localStorage.getItem('kubusai:user')")
+    check('[v2.2.2] 처음 여는 기기: 긴 무작위 ID(u + 32자) · 모든 요청이 같은 ID · 쿠키에도 같은 값', bool(LONG.match(stored or '')) and first and set(first) == {stored}
+          and cookie_of(c) == stored and not errs, f'{stored} {set(first)} {cookie_of(c)} {errs[:1]}')
+    c.close()
+    old_id = 'u' + format(int(time.time() * 1000) % (36 ** 8), 'x')[:8].rjust(8, '0')
+    c, pg, errs, first, _ = open_ids(f"try{{localStorage.setItem('kubusai:user','{old_id}')}}catch(e){{}}")
+    check('[v2.2.2] 예전 8자 ID가 있는 기기: 바꾸지 않고 그대로 씀', pg.evaluate("localStorage.getItem('kubusai:user')") == old_id and first and set(first) == {old_id} and not errs, f'{old_id} {set(first)}')
+    c.close()
+    c, pg, errs, first, again = open_ids(BLOCK_LS, reload=True)
+    blocked_id = first[0] if first else ''
+    ls_state = pg.evaluate("(() => { try { localStorage.getItem('x'); return 'open'; } catch (e) { return 'blocked'; } })()")
+    check("[v2.2.2] 저장 공간이 막힌 기기(쿠키는 됨): 'demo'가 아니라 이 기기만의 긴 ID · 새로고침해도 쿠키로 같은 사용자 · 앱은 그대로 열림",
+          ls_state == 'blocked' and bool(LONG.match(blocked_id)) and set(first) == {blocked_id} and again and set(again) == {blocked_id} and cookie_of(c) == blocked_id and not errs,
+          f'{ls_state} {set(first)} → {set(again)} {errs[:1]}')
+    c.close()
+    ca, pga, errsa, firsta, againa = open_ids(BLOCK_LS + BLOCK_COOKIE, reload=True)
+    cb, pgb, errsb, firstb, _ = open_ids(BLOCK_LS + BLOCK_COOKIE)
+    ida, idb = (firsta or [''])[0], (firstb or [''])[0]
+    check("[v2.2.2] 저장 공간 · 쿠키가 모두 막힌 기기 둘: 각자 다른 임시 ID(같은 페이지 안에서는 같은 값) · 'demo' 없음",
+          bool(LONG.match(ida)) and bool(LONG.match(idb)) and ida != idb and set(firsta) == {ida} and set(firstb) == {idb} and 'demo' not in firsta + firstb + againa and not errsa and not errsb,
+          f'{set(firsta)} / {set(firstb)} {errsa[:1]} {errsb[:1]}')
+    check('[v2.2.2] 모두 막힌 기기를 새로 열면 새 임시 ID(기록을 남길 곳이 없음 — 다른 사람 기록과 섞이지 않음)', againa and len(set(againa)) == 1 and bool(LONG.match(againa[0])) and againa[0] != ida, f'{ida} → {set(againa)}')
+    ca.close(); cb.close()
+    ih = api(ctx := b.new_context(), 8802, 'x', 'GET', '/api/health')['identity']; ctx.close()
+    check("[v2.2.2] /api/health identity: 'demo'로 온 요청 0 · 긴 ID 사용자가 생김 · ID 값은 싣지 않음", ih['demoHeader'] == 0 and ih['users']['long'] >= 4 and ih['demoUser'] is None
+          and blocked_id not in json.dumps(ih), str(ih))
+    b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)
 print(f'{len(res) - n} passed, {n} failed'); sys.exit(1 if n else 0)

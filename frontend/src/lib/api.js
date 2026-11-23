@@ -1,38 +1,30 @@
 // 백엔드 연동(실서비스 빌드). 서울시 API 키 · VAPID 비밀키 · DB 키는 서버에만 있고, 화면은 /api만 부릅니다.
+import { createUserIdSource } from '@shared/userId.js';
+
 const USER_KEY = 'kubusai:user';
 const COOKIE = 'kubusai_uid';
-const VALID_ID = /^[\w-]{3,64}$/;
 
 function readCookie() {
-  try { const m = /(?:^|;\s*)kubusai_uid=([\w-]{3,64})/.exec(document.cookie); return m ? m[1] : null; } catch { return null; }
+  const m = /(?:^|;\s*)kubusai_uid=([\w-]{3,64})/.exec(document.cookie);
+  return m ? m[1] : null;
 }
 // 쿠키에도 남겨 둠: 아이폰이 홈 화면 앱으로 쿠키를 옮겨 주는 경우 같은 사용자로 이어짐(이어받기 코드의 보조 수단)
-let cookieWritten = false;
+//   · 저장 공간(localStorage)만 막힌 기기도 쿠키로 같은 사용자를 이어 감
 function writeCookie(id) {
-  if (cookieWritten) return;
-  cookieWritten = true;
-  try { document.cookie = `${COOKIE}=${id}; Max-Age=31536000; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`; } catch { /* 막힌 환경 */ }
+  document.cookie = `${COOKIE}=${id}; Max-Age=31536000; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
 }
+// v2.2.2 사용자 ID(shared/userId.js): 새 사용자는 암호학적 난수 32자 · 예전 8자 ID는 그대로 ·
+//   저장 공간이 막혀도 'demo'(모든 막힌 기기가 같이 쓰던 값)로 떨어지지 않고 쿠키 또는 이 페이지만의 임시 ID
+const ids = createUserIdSource({
+  local: { get: () => localStorage.getItem(USER_KEY), set: (v) => localStorage.setItem(USER_KEY, v) },
+  cookie: { get: readCookie, set: writeCookie },
+  random: (n) => crypto.getRandomValues(new Uint8Array(n)),
+});
 /** 이 기기(브라우저)에 저장된 사용자 ID가 있는지 — 홈 화면 앱이 처음 열릴 때는 없음 */
-export function hasLocalUserId() { try { return Boolean(localStorage.getItem(USER_KEY)); } catch { return false; } }
-/** 이어받기로 받은 사용자 ID 저장 */
-export function setUserId(id) {
-  if (!VALID_ID.test(String(id))) return;
-  try { localStorage.setItem(USER_KEY, id); } catch { /* 저장 불가 환경 */ }
-  cookieWritten = false; writeCookie(id);
-}
-export function userId() {
-  try {
-    let id = localStorage.getItem(USER_KEY);
-    if (!id) {
-      const c = readCookie();
-      id = c || `u${Math.random().toString(36).slice(2, 10)}`;
-      localStorage.setItem(USER_KEY, id);
-    }
-    writeCookie(id);
-    return id;
-  } catch { return 'demo'; }
-}
+export function hasLocalUserId() { return ids.hasLocal(); }
+/** 이어받기로 받은 사용자 ID 저장(저장 공간이 막혔으면 이 페이지 · 쿠키에) — 받았으면 true('demo' · 이상한 값은 false) */
+export function setUserId(id) { return ids.set(id); }
+export function userId() { return ids.get(); }
 async function req(method, url, body, { auth = true } = {}) {
   const res = await fetch(url, { method, headers: { 'content-type': 'application/json', ...(auth ? { 'x-user-id': userId() } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const j = await res.json().catch(() => ({}));

@@ -18,7 +18,8 @@ export async function bootstrapIdentity() {
   if (!token || !TOKEN.test(token) || hasLocalUserId()) return {};
   try {
     const r = await withTimeout(api.claimHandoff(token), 6000);
-    if (r?.userId) { setUserId(r.userId); return { claimed: true, hasData: Boolean(r.hasData) }; }
+    // v2.2.2 받은 ID가 'demo'(예전에 저장 공간이 막힌 기기들이 같이 쓰던 값)면 받지 않고 새 사용자로 시작
+    if (r?.userId && setUserId(r.userId)) return { claimed: true, hasData: Boolean(r.hasData) };
   } catch { /* 시간이 지났거나 이미 쓴 코드 → 새 사용자로 시작 */ }
   return {};
 }
