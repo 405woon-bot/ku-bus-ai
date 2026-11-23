@@ -1,8 +1,13 @@
-import { useId, useState } from 'react';
-import { Button, Chip, IconChevron, IconCube, IconExternal, IconStop, SourceTag } from './ui.jsx';
+import { useCallback, useId, useState } from 'react';
+import { Button, Chip, IconChevron, IconCube, IconExternal, IconMail, IconStop, IconTrash, SourceTag } from './ui.jsx';
 import PushPanel from './PushPanel.jsx';
 import KCardSettings from './KCardSettings.jsx';
 import TransitSettings from './TransitSettings.jsx';
+import DeleteDataDialog from './DeleteDataDialog.jsx';
+
+// v2.2.5 문의(데이터 정책 2026-11-23 확정): 오류 · 제안은 공개 게시판(GitHub Issues), 개인 기록에 관한 요청은 이메일
+export const ISSUES_URL = 'https://github.com/405woon-bot/ku-bus-ai/issues';
+export const CONTACT_EMAIL = '405woon@gmail.com';
 
 function Group({ title, children, note }) {
   const id = useId();
@@ -191,12 +196,43 @@ function ServerGroup({ mode, live: directLive, transitLive = null, health, sync,
   );
 }
 
+/** v2.2.5 내 데이터: 무엇을 저장하는지 · 90일 자동 삭제 · K•CARD+는 이 기기만 · 문의 · [내 데이터 모두 삭제](승인한 미리보기 그대로) */
+function MyDataGroup({ onDelete }) {
+  const link = 'inline-flex items-center justify-center whitespace-nowrap rounded-[10px] border font-semibold transition-colors h-8 px-2.5 text-[13px] gap-1.5 bg-panel text-ink border-line hover:border-primary-line hover:text-primary';
+  return (
+    <section aria-label="내 데이터" className="grid grid-cols-1 gap-2" data-testid="mydata">
+      <h2 className="px-1 text-[13px] font-bold text-ink-muted">내 데이터</h2>
+      <div className="divide-y divide-line rounded-2xl border border-line bg-panel shadow-card">
+        <Item label="서버에 저장하는 것" desc="시간표 · 탑승 정류장 · 출발지(GPS는 약 100m 칸) · 설정 · 알림 구독 · 알림/도착 기록. 출발 알림 계산에만 써요." />
+        <Item label="보관 기간" desc="앱을 쓰거나 출발 알림을 받은 지 90일이 지나면 서버 기록은 자동으로 지워져요."><Chip level="info">90일</Chip></Item>
+        <Item label="K•CARD+ 캡처" desc="이 기기에만 있어요. 서버로 보내지 않아요."><Chip>이 기기만</Chip></Item>
+        <div className="grid gap-2 px-4 py-3.5">
+          <div>
+            <p className="text-[15px] font-semibold">문의</p>
+            <p className="text-xs text-ink-muted">오류 · 제안은 GitHub Issues에, 내 기록에 관한 요청은 이메일로 알려 주세요.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <a href={ISSUES_URL} target="_blank" rel="noopener noreferrer" className={link} data-testid="contact-issues"><IconExternal className="h-4 w-4" />GitHub Issues</a>
+            <a href={`mailto:${CONTACT_EMAIL}`} className={link} data-testid="contact-mail"><IconMail className="h-4 w-4" />{CONTACT_EMAIL}</a>
+          </div>
+        </div>
+        <div className="grid gap-2 px-4 py-3.5">
+          <p className="text-xs leading-relaxed text-ink-muted">서버 기록과 이 기기의 저장값을 지금 바로 지워요. 되돌릴 수 없어요.</p>
+          <Button variant="danger" className="w-full" onClick={onDelete} data-testid="delete-all"><IconTrash className="h-5 w-5" />내 데이터 모두 삭제</Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm, onRequestPerm, onTestAlarm, info, push, onOpenGuide, sync, live, transitLive = null, health, kcard, onViewCard, onResetPersonal, highlightKCard, onResetAll, now, todayClass, nextClass, walkTable, highlightTransit, autoOrigin = null, onOriginDone, onDirectMode }) {
   const { prefs } = state;
   const hasRoute = Boolean(state.transit?.route?.legs?.length);
   const transitOn = state.transit?.mode === 'transit' && hasRoute;
   const setPrefs = (patch) => dispatch({ type: 'setPrefs', patch });
   const [confirmReset, setConfirmReset] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const closeDelete = useCallback(() => setDeleteOpen(false), []);
   // v2.1 정류장 직행은 '고급'(접힘) — 경로 없이 정류장으로만 안내 중이면 처음부터 펼쳐 둠
   const [advOpen, setAdvOpen] = useState(!transitOn && Boolean(state.stop));
   return (
@@ -260,6 +296,9 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
       <PushPanel info={info} push={push} onOpenGuide={onOpenGuide} prefsNotify={prefs.notify} />
 
       <ServerGroup mode={mode} live={live} transitLive={transitLive} health={health} sync={sync} transitOn={transitOn} />
+
+      <MyDataGroup onDelete={() => setDeleteOpen(true)} />
+      {deleteOpen && <DeleteDataDialog mode={mode} onClose={closeDelete} />}
 
       <Group title="정보">
         {mode === 'sample' && (

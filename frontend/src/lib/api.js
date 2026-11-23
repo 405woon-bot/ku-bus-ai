@@ -25,8 +25,19 @@ export function hasLocalUserId() { return ids.hasLocal(); }
 /** 이어받기로 받은 사용자 ID 저장(저장 공간이 막혔으면 이 페이지 · 쿠키에) — 받았으면 true('demo' · 이상한 값은 false) */
 export function setUserId(id) { return ids.set(id); }
 export function userId() { return ids.get(); }
-async function req(method, url, body, { auth = true } = {}) {
-  const res = await fetch(url, { method, headers: { 'content-type': 'application/json', ...(auth ? { 'x-user-id': userId() } : {}) }, body: body ? JSON.stringify(body) : undefined });
+// v2.2.5 '내 데이터 모두 삭제' 중 · 뒤에는 다른 요청을 보내지 않음 — 지우는 사이 예약된 저장(시간표 · 설정 · 알림 구독)이 기록을 다시 만들지 않게
+let halted = false;
+export function haltRequests(on = true) { halted = Boolean(on); }
+async function req(method, url, body, { auth = true, whileHalted = false, timeoutMs = 0 } = {}) {
+  if (halted && !whileHalted) throw Object.assign(new Error('내 데이터를 지우는 중이에요'), { status: 0, kind: 'halted' });
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let res;
+  try {
+    res = await fetch(url, { method, headers: { 'content-type': 'application/json', ...(auth ? { 'x-user-id': userId() } : {}) }, body: body ? JSON.stringify(body) : undefined, ...(ctrl ? { signal: ctrl.signal } : {}) });
+  } catch (e) {
+    throw Object.assign(new Error(ctrl?.signal.aborted ? '서버가 답하지 않았어요' : '인터넷 연결을 확인해 주세요'), { status: 0, kind: 'network', cause: e });
+  } finally { if (timer) clearTimeout(timer); }
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(j.error || `서버 응답 ${res.status}`), { status: res.status, kind: j.kind || null, data: j });
   return j;
@@ -65,4 +76,6 @@ export const api = {
   // 홈 화면 앱으로 설정 이어받기
   handoff: () => req('POST', '/api/me/handoff', {}),
   claimHandoff: (token) => req('POST', '/api/handoff/claim', { token }, { auth: false }), // 받기 전에는 사용자 ID를 만들지 않음
+  // v2.2.5 '내 데이터 모두 삭제' — 서버가 외부 DB에서도 지운 뒤에 성공으로 답함(서버가 잠들어 있으면 깨어나는 데 걸리는 시간까지 넉넉히 45초)
+  deleteMe: () => req('DELETE', '/api/me', { confirm: '삭제' }, { whileHalted: true, timeoutMs: 45000 }),
 };

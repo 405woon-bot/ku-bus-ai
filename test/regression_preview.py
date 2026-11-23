@@ -334,6 +334,36 @@ with sync_playwright() as p:
         check(f'[{label}] 스위치를 끄면 다시 환승 경로 홈', pg.get_by_test_id('origin-chip').count() == 1)
         ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
         check(f'[{label}] 환승 화면 가로 넘침 없음', ov <= 0, str(ov))
+        # ── v2.2.5 설정 › 내 데이터 · 내 데이터 모두 삭제(미리보기: 서버 없이 이 화면의 예시 값만 지움) ──
+        pg.evaluate("location.hash = '#settings'"); pg.wait_for_timeout(300)
+        md = pg.get_by_test_id('mydata'); md.scroll_into_view_if_needed()
+        mtx = flat(md.inner_text())
+        check(f'[{label}] v2.2.5 설정 › 내 데이터: 저장하는 것 · 보관 90일 · K•CARD+ 이 기기만 · 문의(GitHub Issues · 이메일) · 모두 삭제',
+              '서버에 저장하는 것' in mtx and '90일' in mtx and '이 기기만' in mtx and md.get_by_test_id('contact-issues').get_attribute('href') == 'https://github.com/405woon-bot/ku-bus-ai/issues'
+              and md.get_by_test_id('contact-mail').get_attribute('href') == 'mailto:405woon@gmail.com' and md.get_by_test_id('delete-all').count() == 1, mtx[:160])
+        md.screenshot(path=OUT + f'preview_{label}_mydata.png')
+        md.get_by_test_id('delete-all').click(); pg.wait_for_timeout(300)
+        dlg = pg.get_by_test_id('delete-dialog'); dtx = flat(dlg.inner_text())
+        check(f"[{label}] 확인 창(미리보기): '미리보기 · 서버 없음' · 되돌릴 수 없음 · 빈칸이면 [모두 삭제] 꺼짐",
+              '미리보기 · 서버 없음' in dtx and '지우면 되돌릴 수 없어요.' in dtx and pg.get_by_test_id('delete-confirm').is_disabled(), dtx[:160])
+        pg.get_by_test_id('delete-input').fill('삭제'); pg.get_by_test_id('delete-input').press('Enter'); pg.wait_for_timeout(400)
+        check(f"[{label}] '삭제' 입력 뒤 Enter → 지우지 않음(빨간 버튼으로만) · 버튼 켜짐", dlg.count() == 1 and dlg.get_attribute('data-state') == 'ready'
+              and not pg.get_by_test_id('delete-confirm').is_disabled() and pg.get_by_test_id('deleted-note').count() == 0)
+        pg.screenshot(path=OUT + f'preview_{label}_delete_dialog.png')
+        pg.keyboard.press('Escape'); pg.wait_for_timeout(250)
+        check(f'[{label}] Esc → 창만 닫힘(지우지 않음 · 환승 경로 그대로)', dlg.count() == 0 and pg.get_by_test_id('transit-settings').get_attribute('data-mode') == 'transit')
+        md.get_by_test_id('delete-all').click(); pg.wait_for_timeout(300)
+        pg.get_by_test_id('delete-input').fill(' 삭제 ')
+        with pg.expect_navigation(timeout=10000):
+            pg.get_by_test_id('delete-confirm').click()
+        pg.get_by_test_id('deleted-note').wait_for(timeout=8000)
+        pg.locator('section[aria-label="출발 추천"]').wait_for(timeout=8000)
+        keys = pg.evaluate("Object.keys(localStorage)")
+        check(f'[{label}] 모두 삭제(미리보기) → 처음 상태(정류장 직행 · 출발지 없음) · 완료 안내 · 주소에 표시 없음 · 미리보기 띠 그대로',
+              pg.get_by_test_id('origin-chip').count() == 0 and 'deleted' not in pg.url and pg.evaluate('location.hash') == '#home'
+              and '내 데이터를 모두 지웠어요' in pg.get_by_test_id('deleted-note').inner_text() and pg.get_by_role('button', name='실시간 연결', exact=True).count() == 1
+              and 'kubusai:kcard' not in keys, f'{pg.url} {keys}')
+        if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_deleted_home.png')
         check(f'[{label}] 페이지 오류 없음', not errs, str(errs)[:200])
         ctx.close()
     b.close()

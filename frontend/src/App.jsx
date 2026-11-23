@@ -29,6 +29,7 @@ import ImportDialog from './components/ImportDialog.jsx';
 import AlarmToasts from './components/AlarmToasts.jsx';
 import { InstallBar, InstallSheet } from './components/InstallGuide.jsx';
 import KCardViewer from './components/KCardViewer.jsx';
+import { IconCheck } from './components/ui.jsx';
 
 const readTab = () => { try { const h = window.location.hash.slice(1); return TABS.some((t) => t.id === h) ? h : 'home'; } catch { return 'home'; } };
 
@@ -87,7 +88,7 @@ function useHandoffLink(enabled) {
   }, [enabled]);
 }
 
-export default function App({ handoff = null }) {
+export default function App({ handoff = null, deleted = false }) {
   const [state, dispatch] = useAppState();
   const sync = useServerSync(state, dispatch, MODE === 'api');
   const [tab, go] = useTab();
@@ -150,6 +151,9 @@ export default function App({ handoff = null }) {
   // 홈 화면 앱이 처음 열려 설정을 이어받았으면 잠깐 알림
   const [handoffToast, setHandoffToast] = useState(Boolean(handoff?.claimed));
   useEffect(() => { if (!handoffToast) return undefined; const t = setTimeout(() => setHandoffToast(false), 6000); return () => clearTimeout(t); }, [handoffToast]);
+  // v2.2.5 '내 데이터 모두 삭제' 뒤 처음 화면: 맨 위 완료 안내(12초)
+  const [deletedNote, setDeletedNote] = useState(Boolean(deleted));
+  useEffect(() => { if (!deletedNote) return undefined; const t = setTimeout(() => setDeletedNote(false), 12000); return () => clearTimeout(t); }, [deletedNote]);
 
   const [hlKCard, setHlKCard] = useState(false);
   const goKCard = useCallback(() => { // 설정 · K•CARD+ 칸으로 이동해 잠깐 강조
@@ -200,6 +204,15 @@ export default function App({ handoff = null }) {
       )}
 
       <main className={`gutter mx-auto ${showBar ? 'pb-[calc(156px+env(safe-area-inset-bottom,0px))] md:pb-24' : 'pb-[calc(96px+env(safe-area-inset-bottom,0px))] md:pb-14'} pt-4 short:pt-3 md:pt-8 ${tab === 'timetable' ? 'max-w-[1160px]' : 'max-w-[960px]'}`}>
+        {deletedNote && tab === 'home' && (
+          <div role="status" data-testid="deleted-note" className="mx-auto mb-4 flex w-full max-w-[560px] items-start gap-2.5 rounded-2xl border border-ok/30 bg-ok-soft px-4 py-3 text-ok shadow-card">
+            <IconCheck className="h-5 w-5 shrink-0" />
+            <div>
+              <p className="text-[15px] font-bold">내 데이터를 모두 지웠어요</p>
+              <p className="text-xs leading-relaxed">서버 기록과 이 기기의 저장값을 지웠어요. 새 사용자로 처음부터 시작해요.</p>
+            </div>
+          </div>
+        )}
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             arrival={{ ...arrival, cls: todayClass }} kcardReady={kcard.status === 'ready'} personal={state.personal}

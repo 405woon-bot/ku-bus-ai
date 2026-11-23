@@ -84,8 +84,9 @@ function validClass(c, i) {
  * subway = createSubwayService() — 서울시 실시간 지하철(환승 경로의 첫 지하철). 없으면 표준 대기 시간
  * nearKu = createNearKuFinder() — v2.1 경로를 못 찾을 때 출발지 400m 안의 국민대행 정류장(없으면 이 안내 없음)
  * warmer = createOdsayWarmer() — v2.1 밤에 주요 환승역 경로 미리 찾기(상태 표시용, 실행은 스케줄러)
+ * deletedHoldMs — v2.2.5 '내 데이터 모두 삭제' 뒤 같은 사용자 번호의 쓰기 요청을 받지 않는 시간(기본 2분)
  */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, nearKu = null, warmer = null, coords = null, retention = null }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, nearKu = null, warmer = null, coords = null, retention = null, deletedHoldMs = 2 * 60_000 }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -102,6 +103,18 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   });
   // 외부 DB(Upstash)에서 사용자 기록을 다 읽기 전에는 /api 요청을 잠깐 기다리게 함(빈 기록으로 덮어쓰지 않게)
   app.use('/api', (_req, _res, next) => { Promise.resolve(store.ready).then(() => next(), () => next()); });
+  // v2.2.5 방금 '내 데이터 모두 삭제'로 지운 사용자 번호: 잠깐(기본 2분) 이 번호로 오는 쓰기 요청은 받지 않음 —
+  //   지우기 직전에 보낸 저장(설정 · 시간표 · 알림 구독)이 지운 뒤에 도착해 기록을 다시 만들지 않게.
+  //   서버 메모리에만 두고 시간이 지나면 잊음(외부 DB에 남기지 않음) · 읽기는 그대로(빈 기록, 저장 안 함) · 지우기 재시도는 받음
+  const justDeleted = new Map();
+  app.use('/api', (req, res, next) => {
+    if (!justDeleted.size || req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const at = justDeleted.get(req.userId);
+    if (at === undefined) return next();
+    if (Date.now() - at > deletedHoldMs) { justDeleted.delete(req.userId); return next(); }
+    if (req.method === 'DELETE' && req.path === '/me') return next();
+    res.status(409).json({ error: '방금 지운 사용자 번호예요. 앱을 새로 열어 주세요.', kind: 'deleted' });
+  });
   const upSince = new Date().toISOString();
 
   // 실시간 공급자 상태(seoul | mock + 폴백 이유)와 서버 푸시·스케줄러 상태
@@ -128,6 +141,29 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));
   app.get('/api/me', (req, res) => { const { push, fired, pushLog, handoff, ...u } = store.user(req.userId); res.json({ ...u, pushSubscriptions: push.length }); });
+  // v2.2.5 '내 데이터 모두 삭제': 이 사용자의 서버 기록 전체(시간표 · 정류장 · 출발지 · 설정 · 알림 구독 · 알림/도착 기록)를 지움.
+  //   · 사용자 번호(X-User-Id) 헤더가 있어야 하고, 여러 기기가 같이 쓰던 'demo'는 지우지 않음 · 본문에 확인 문구 { confirm: '삭제' } 필수
+  //   · 외부 DB를 다 읽기 전에는 지우지 않음(아직 안 읽은 기록이 남을 수 있어서) · 외부 DB에서도 지워진 뒤에 성공으로 답함
+  //     → 화면은 성공을 받은 뒤에만 이 기기 값을 지움. 실패하면 503(이 기기 값은 그대로, 다시 눌러 재시도 — 이미 없으면 그대로 성공)
+  app.delete('/api/me', async (req, res) => {
+    const h = req.get('x-user-id');
+    if (h == null || !clean(h, 64)) return res.status(400).json({ error: '사용자 번호가 없어요', kind: 'no-user' });
+    if (req.userId === SHARED_ID) return res.status(400).json({ error: "여러 기기가 같이 쓰던 기록('demo')이라 여기서 지울 수 없어요", kind: 'shared' });
+    if (String(req.body?.confirm ?? '').normalize('NFC').trim() !== '삭제') return res.status(400).json({ error: "확인 문구('삭제')가 필요해요", kind: 'confirm' });
+    if (store.info?.() && !store.info().loaded) return res.status(503).json({ error: '서버가 저장소를 아직 다 읽지 못했어요', kind: 'not-ready' });
+    const existed = store.peek(req.userId) !== undefined;
+    const removed = existed ? store.remove(req.userId) : false;
+    if (existed && !removed) return res.status(500).json({ error: '이 서버 저장소에서는 기록을 지울 수 없어요', kind: 'unsupported' });
+    for (let i = 0; i < 3 && store.removalPending?.(req.userId); i++) {
+      await store.flush();
+      if (store.removalPending?.(req.userId)) await new Promise((r) => setTimeout(r, 300));
+    }
+    if (store.removalPending?.(req.userId)) return res.status(503).json({ error: '외부 저장소에서 아직 지우지 못했어요', kind: 'pending' });
+    const t = Date.now();
+    for (const [id, at] of justDeleted) if (t - at > deletedHoldMs) justDeleted.delete(id);
+    justDeleted.set(req.userId, t);
+    res.json({ ok: true, removed });
+  });
   // 서버 깨우기(cron-job.org가 10분마다 부름): Render 무료 서버는 15분 동안 접속이 없으면 잠들어 알림을 못 보냄
   app.get('/api/wake', (_req, res) => {
     const si = store.info?.() ?? {};

@@ -596,6 +596,85 @@ with sync_playwright() as p:
     ih = api(ctx := b.new_context(), 8802, 'x', 'GET', '/api/health')['identity']; ctx.close()
     check("[v2.2.2] /api/health identity: 'demo'로 온 요청 0 · 긴 ID 사용자가 생김 · ID 값은 싣지 않음", ih['demoHeader'] == 0 and ih['users']['long'] >= 4 and ih['demoUser'] is None
           and blocked_id not in json.dumps(ih), str(ih))
+
+    # ⑧ v2.2.5 설정 › 내 데이터 › '내 데이터 모두 삭제'(8801 · 가짜 Upstash): '삭제'를 입력해야 버튼이 켜짐 · 서버가 실패하면 이 기기 값은 그대로 ·
+    #    성공하면 서버(외부 DB) 기록 → 이 기기 알림 구독 · K•CARD+ · 저장값 → 새 사용자 번호로 처음 화면 + 완료 안내
+    ctx = b.new_context(**p.devices['iPhone 13'])
+    ctx.grant_permissions(['notifications'], origin='http://localhost:8801')
+    ctx.add_init_script(PUSH_STUB)
+    pg = ctx.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=T0); pg.goto('http://localhost:8801/')
+    pg.get_by_test_id('onboarding').wait_for(timeout=10000)
+    old = pg.evaluate("localStorage.getItem('kubusai:user')")
+    api(ctx, 8801, old, 'PUT', '/api/me/timetable', {'classes': [CLASS]})
+    api(ctx, 8801, old, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
+    pg.evaluate("localStorage.setItem('kubusai:kcard', JSON.stringify({ width: 1, height: 1, size: 1, type: 'image/png', savedAt: 1, dataUrl: 'data:image/png;base64,AA==' })); localStorage.setItem('kubusai:push', 'on'); localStorage.setItem('__e2e_push_sub', '1')")
+    pg.evaluate("navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)")
+    pg.reload(); pg.locator('section[aria-label="출발 추천"]').wait_for(timeout=10000)
+    deleted0 = api(ctx, 8801, 'x', 'GET', '/api/health')['storage'].get('deleted', 0)
+    pg.evaluate("location.hash = '#settings'")
+    md = pg.get_by_test_id('mydata'); md.wait_for(timeout=8000); md.scroll_into_view_if_needed()
+    mtx = flat(md.inner_text())
+    check('[v2.2.5] 설정 › 내 데이터: 저장하는 것 · 90일 · K•CARD+ 이 기기만 · 문의(GitHub Issues · 이메일) · 내 데이터 모두 삭제',
+          '서버에 저장하는 것' in mtx and '90일' in mtx and '이 기기만' in mtx and md.get_by_test_id('contact-issues').get_attribute('href') == 'https://github.com/405woon-bot/ku-bus-ai/issues'
+          and md.get_by_test_id('contact-issues').get_attribute('target') == '_blank' and md.get_by_test_id('contact-mail').get_attribute('href') == 'mailto:405woon@gmail.com'
+          and md.get_by_test_id('delete-all').count() == 1, mtx[:200])
+    md.screenshot(path=str(OUT / 'live_iphone13_mydata.png'))
+    md.get_by_test_id('delete-all').click()
+    dlg = pg.get_by_test_id('delete-dialog'); dlg.wait_for(timeout=5000)
+    confirm = pg.get_by_test_id('delete-confirm'); inp = pg.get_by_test_id('delete-input')
+    states = [confirm.is_disabled()]
+    inp.fill('삭'); states.append(confirm.is_disabled())
+    inp.fill('삭제하기'); states.append(confirm.is_disabled())
+    inp.fill('삭제'); states.append(confirm.is_disabled())
+    check("[v2.2.5] 확인 창: '삭제'를 정확히 입력해야만 [모두 삭제]가 켜짐(빈칸 · '삭' · '삭제하기'는 꺼짐) · 키보드가 바로 올라오지 않음(입력칸에 자동 포커스 안 함)",
+          states == [True, True, True, False] and dlg.get_attribute('data-state') == 'ready', str(states))
+    inp.press('Enter'); pg.wait_for_timeout(500)
+    check("[v2.2.5] '삭제' 입력 뒤 키보드 완료(Enter) → 지우지 않음(빨간 버튼으로만) · 창 · 서버 기록 · 이 기기 사용자 번호 그대로",
+          pg.get_by_test_id('delete-dialog').count() == 1 and len(api(ctx, 8801, old, 'GET', '/api/me')['classes']) == 1 and pg.evaluate("localStorage.getItem('kubusai:user')") == old
+          and pg.evaluate("document.activeElement?.dataset?.testid") != 'delete-input')
+    pg.screenshot(path=str(OUT / 'live_iphone13_delete_dialog.png'))
+    pg.get_by_test_id('delete-cancel').click(); pg.wait_for_timeout(300)
+    kept = api(ctx, 8801, old, 'GET', '/api/me')
+    check('[v2.2.5] 취소 → 창만 닫히고 아무것도 지우지 않음', pg.get_by_test_id('delete-dialog').count() == 0 and len(kept['classes']) == 1 and kept['stop']['arsId'] == '08901')
+    # 서버가 실패하면(503) 이 기기 값은 그대로 · 다시 시도
+    def fail_once(route):
+        if route.request.method == 'DELETE':
+            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': '외부 저장소에서 아직 지우지 못했어요', 'kind': 'pending'}))
+        else:
+            route.continue_()
+    pg.route('**/api/me', fail_once)
+    md.get_by_test_id('delete-all').click(); dlg.wait_for(timeout=5000)
+    pg.get_by_test_id('delete-input').fill('삭제'); pg.get_by_test_id('delete-confirm').click()
+    pg.get_by_test_id('delete-error').wait_for(timeout=8000)
+    etx = flat(pg.get_by_test_id('delete-error').inner_text())
+    still = api(ctx, 8801, old, 'GET', '/api/me')
+    check('[v2.2.5] 서버 실패: 이유 + 이 기기 값은 그대로 · [다시 시도] · 이 기기 사용자 번호 · K•CARD+ 그대로 · 서버 기록 그대로',
+          '서버 기록을 지우지 못했어요.' in etx and '이 기기 값은 그대로' in etx and flat(pg.get_by_test_id('delete-confirm').inner_text()) == '다시 시도'
+          and pg.evaluate("localStorage.getItem('kubusai:user')") == old and pg.evaluate("localStorage.getItem('kubusai:kcard')") is not None and len(still['classes']) == 1, etx)
+    pg.screenshot(path=str(OUT / 'live_iphone13_delete_error.png'))
+    pg.unroute('**/api/me')
+    with pg.expect_navigation(timeout=15000):
+        pg.get_by_test_id('delete-confirm').click()
+    pg.get_by_test_id('deleted-note').wait_for(timeout=10000)
+    pg.get_by_test_id('onboarding').wait_for(timeout=10000)
+    new_id = pg.evaluate("localStorage.getItem('kubusai:user')")
+    gone = api(ctx, 8801, old, 'GET', '/api/me')
+    h8 = api(ctx, 8801, 'x', 'GET', '/api/health')['storage']
+    cookie_now = next((k['value'] for k in ctx.cookies() if k['name'] == 'kubusai_uid'), None)
+    check('[v2.2.5] 모두 삭제 → 서버(외부 DB) 기록 없음 · 새 사용자 번호(긴 ID) · 쿠키도 새 번호 · 처음 화면 + 완료 안내 · 주소에 표시 없음',
+          len(gone['classes']) == 0 and gone['stop'] is None and h8.get('deleted', 0) >= deleted0 + 1 and new_id and new_id != old and bool(LONG.match(new_id))
+          and cookie_now == new_id and 'deleted' not in pg.url and '내 데이터를 모두 지웠어요' in pg.get_by_test_id('deleted-note').inner_text(), f'{old} → {new_id} {pg.url} {h8}')
+    late = api(ctx, 8801, old, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
+    check('[v2.2.5] 지운 직후 예전 번호로 늦게 온 저장은 받지 않음(409 deleted) · 기록을 다시 만들지 않음',
+          late.get('kind') == 'deleted' and api(ctx, 8801, old, 'GET', '/api/me')['stop'] is None, str(late))
+    check('[v2.2.5] 이 기기: K•CARD+ 캡처 · 알림 켬 표시 · 알림 구독(브라우저) 지움 · 앱 저장값은 새 사용자 것만',
+          pg.evaluate("localStorage.getItem('kubusai:kcard')") is None and pg.evaluate("localStorage.getItem('kubusai:push')") is None
+          and pg.evaluate("localStorage.getItem('__e2e_push_sub')") is None and '정릉시장' not in (pg.evaluate("localStorage.getItem('kubusai:v1')") or ''))
+    pg.screenshot(path=str(OUT / 'live_iphone13_deleted_home.png'))
+    check('[v2.2.5] 페이지 오류 없음', not errs, str(errs)[:200])
+    ctx.close()
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)

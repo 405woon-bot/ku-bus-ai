@@ -27,6 +27,9 @@ export const IconSearch = I(<><circle cx="11" cy="11" r="6.5" /><path d="m16 16 
 export const IconLocate = I(<><circle cx="12" cy="12" r="6.5" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" /><circle cx="12" cy="12" r="2" /></>);
 export const IconChevron = I(<path d="m9.5 5.5 6.5 6.5-6.5 6.5" />);
 export const IconReplay = I(<><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" /><path d="M4.5 4.5v4h4" /></>);
+// v2.2.5 내 데이터: 휴지통 · 메일
+export const IconTrash = I(<path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l.9 12.2A1.5 1.5 0 0 0 8.9 20.6h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7M10 11v5.5M14 11v5.5" />);
+export const IconMail = I(<><rect x="3.5" y="5.5" width="17" height="13" rx="2" /><path d="m4 7 8 6 8-6" /></>);
 // 지하철(앞모습) · 출발지(깃발)
 export const IconTrain = I(<><rect x="5.5" y="3" width="13" height="14" rx="3.5" /><path d="M5.5 10h13M9 21l1.5-3.5M15 21l-1.5-3.5" /><circle cx="9" cy="13.6" r=".8" /><circle cx="15" cy="13.6" r=".8" /></>);
 export const IconRoute = I(<><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M8.2 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.8" /></>);
@@ -59,6 +62,7 @@ export function Button({ variant = 'default', size = 'md', className = '', child
     default: 'bg-panel text-ink border-line hover:border-primary-line hover:text-primary',
     ghost: 'bg-transparent text-ink-muted border-transparent hover:bg-surface hover:text-ink',
     danger: 'bg-panel text-danger border-danger/40 hover:bg-danger-soft',
+    dangerFill: 'bg-danger text-white border-danger hover:opacity-90', // v2.2.5 되돌릴 수 없는 마지막 확인 버튼
   }[variant];
   const s = size === 'sm' ? 'h-8 px-2.5 text-[13px] gap-1.5' : 'h-10 px-3.5 text-sm gap-2';
   return <button type="button" className={`inline-flex items-center justify-center whitespace-nowrap rounded-[10px] border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${s} ${v} ${className}`} {...rest}>{children}</button>;
@@ -122,24 +126,29 @@ export function Segmented({ value, onChange, options, label, size = 'md' }) {
   );
 }
 
-/** 모달 대화상자: Esc·바깥 클릭으로 닫기, 열릴 때 첫 입력에 포커스, 닫히면 원래 버튼으로 포커스 복귀 */
-export function Modal({ title, onClose, children, footer, wide = false }) {
+/**
+ * 모달 대화상자: Esc·바깥 클릭으로 닫기, 열릴 때 첫 입력에 포커스, 닫히면 원래 버튼으로 포커스 복귀
+ *   v2.2.5 focusFirst=false: 창 자체에 포커스(휴대폰 키보드가 바로 올라와 안내를 가리지 않게) · canClose=false: 닫기 막음(지우는 중)
+ */
+export function Modal({ title, onClose, children, footer, wide = false, focusFirst = true, canClose = true }) {
   const hid = useId(), ref = useRef(null);
+  const closeRef = useRef(onClose), canRef = useRef(canClose);
+  closeRef.current = onClose; canRef.current = canClose;
   useEffect(() => {
     const prev = document.activeElement;
-    const el = ref.current?.querySelector('input,select,textarea,button:not([data-close])');
-    el?.focus();
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    if (focusFirst) ref.current?.querySelector('input,select,textarea,button:not([data-close])')?.focus();
+    else ref.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape' && canRef.current) closeRef.current(); };
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('keydown', onKey); prev?.focus?.(); };
-  }, [onClose]);
+  }, [onClose, focusFirst]); // 예전과 같이 onClose가 바뀔 때만 다시(지우기 창은 같은 onClose를 넘김)
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={hid}
-        className={`flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-panel shadow-pop sm:rounded-2xl ${wide ? 'sm:max-w-4xl' : 'sm:max-w-lg'}`}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget && canClose) onClose(); }}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={hid} tabIndex={-1}
+        className={`flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-panel shadow-pop outline-none sm:rounded-2xl ${wide ? 'sm:max-w-4xl' : 'sm:max-w-lg'}`}>
         <header className="flex items-center justify-between border-b border-line px-5 py-3.5">
           <h2 id={hid} className="text-base font-bold">{title}</h2>
-          <button type="button" data-close onClick={onClose} aria-label="닫기" className="grid h-9 w-9 place-items-center rounded-lg text-ink-muted hover:bg-surface hover:text-ink"><IconX /></button>
+          <button type="button" data-close onClick={onClose} disabled={!canClose} aria-label="닫기" className="grid h-9 w-9 place-items-center rounded-lg text-ink-muted hover:bg-surface hover:text-ink disabled:opacity-40"><IconX /></button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
         {footer && <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-3 pb-[max(12px,env(safe-area-inset-bottom,0px))]">{footer}</footer>}

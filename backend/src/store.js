@@ -194,6 +194,8 @@ export function createStore(file, { remote = null, log = console, clock = () => 
       if (remote) { st.removed.add(id); if (st.loaded) schedule(flushMs); } else persistFile();
       return true;
     },
+    /** v2.2.5 이 사용자 지우기가 아직 외부 DB에 반영되지 않았는지('내 데이터 모두 삭제'는 반영된 뒤에 성공으로 답함) */
+    removalPending(id) { return st.removed.has(id); },
     /** 저장을 기다리는 것을 지금 저장(종료 · 테스트용) */
     async flush() { clearTimeout(st.timer); st.timer = null; await flush(); },
     /** /api/health용 — 주소 · 토큰은 싣지 않음 */
