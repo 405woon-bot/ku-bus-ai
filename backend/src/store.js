@@ -49,6 +49,8 @@ export const defaultUser = () => ({
   // v2.0 출발 방식: 'direct'(단일 정류장 직행) | 'transit'(출발지 환승 경로, ODsay에서 고른 경로를 그대로 저장)
   // v2.1 retry: 경로를 못 찾아 근처 국민대행 정류장으로 안내 중일 때 다시 찾을 출발지 { origin, reason, at }
   transit: { mode: 'direct', origin: null, route: null, savedAt: null, retry: null },
+  // v2.2 '출발했어요!': 오늘 출발 기록 하나 { key(날짜:수업), at, departMin, routeKey } — 날짜 · 경로가 다르면 쓰지 않음(다음에 누르면 덮어씀)
+  departure: null,
   updatedAt: 0,
 });
 

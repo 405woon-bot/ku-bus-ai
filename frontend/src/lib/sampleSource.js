@@ -135,7 +135,7 @@ const cycle = (m, period, phase) => { let d = (((phase - m) % period) + period) 
  * v2.1: 서버처럼 경로 주변 돌발정보 · 날씨 · 마지막 국민대행 버스의 '왜 늦나요?'(예시 문장) — 미리보기 띠의 돌발 · 날씨 · 왜 늦나요 고르기를 그대로 씀.
  *   preview.explain === 'gap'이면 첫 지하철 열차가 늦게 오는 예시(첫 지하철 간격 한 줄 확인용)
  */
-export function sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin, preview = {} } = {}) {
+export function sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin, preview = {}, departedMin = null } = {}) {
   if (!route) return null;
   const { first, last } = legEnds(route), legs = route.legs, m = now.minutes;
   const out = { fetchedAt: new Date().toISOString(), first: null, final: null, sample: true };
@@ -157,7 +157,7 @@ export function sampleTransitLive(route, now, { cls, walkTable, marginMin, perso
     out.first = { i: first, kind: 'bus', source: 'sample', buses: [{ no: F.no, etasSec: [next * 60, (next + term) * 60], termMin: term }] };
   }
   if (F?.kind === 'subway') {
-    const std = cls ? planTransit({ route, cls, nowMin: m, walkTable, marginMin, personalOffsetMin }) : null;
+    const std = cls ? planTransit({ route, cls, nowMin: m, walkTable, marginMin, personalOffsetMin, departedMin }) : null; // v2.2 출발했으면 그 시각 기준(서버와 같음)
     if (!wantsLive(std, m)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
     else {
       const at = Math.floor(Date.now() / 1000) * 1000; // 받은 시각을 초 단위로(문자열 시각과 맞춰 1초 미만 흔들림 없게)

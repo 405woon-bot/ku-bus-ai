@@ -25,7 +25,7 @@ const slimWhyTrip = (t) => ({
  *   extras = { incidents, weather, explainer } — 화면 요청(/api/transit/live)에서만. 서버 알림 계산에는 넘기지 않음(AI 호출 아끼기)
  * @returns {Promise<{ fetchedAt, first: object|null, final: object|null, incidents?, weather? }>}  도착 예정(초)은 fetchedAt 기준
  */
-export async function transitLive({ route, provider, subway, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null }) {
+export async function transitLive({ route, provider, subway, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null, departedMin = null }) {
   const legs = route?.legs || [];
   const { first, last } = legEnds(route);
   const nowMs = nowDate.getTime(), nowMin = seoulParts(nowDate).minutes;
@@ -55,7 +55,8 @@ export async function transitLive({ route, provider, subway, nowDate = new Date(
     }
   }
   if (F?.kind === 'subway') {
-    const std = cls ? planTransit({ route, cls, nowMin, walkTable, marginMin, personalOffsetMin }) : null;
+    // v2.2 '출발했어요!'를 눌렀으면 그 출발 시각 기준(출발 30분 전 ~ 20분 뒤에만 지하철 실시간)
+    const std = cls ? planTransit({ route, cls, nowMin, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
     if (!force && !wantsLive(std, nowMin)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
     else if (!subway) out.first = { i: first, kind: 'subway', source: 'off', reason: 'no-service', station: F.from.name, trains: [] };
     else {

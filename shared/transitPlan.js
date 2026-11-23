@@ -25,7 +25,10 @@ export const TRANSIT = Object.freeze({
   gapExtraMin: 3,             // v2.1 첫 지하철 열차 간격이 배차간격보다 이만큼(분) 길면 '왜 늦나요?' 한 줄
   nearKuRadiusM: 400,         // v2.1 경로를 못 찾으면 출발지 이 거리 안의 국민대행 정류장으로 직행 안내
   pathMaxPoints: 60,          // v2.1 버스 구간 경유 정류장 좌표(돌발정보 매칭용) 최대 개수
+  departBeforeMin: 60,        // v2.2 [출발했어요!]는 추천 출발 이만큼(분) 전부터 수업 시작 전까지
 });
+// v2.2 '출발했어요!' 뒤: 탈 시각이 이만큼(분) 안으로 다가오거나 지나면 그 구간은 '탔음'으로 고정(실시간 목록에서 그 차가 빠지기 전에)
+const PIN_LOCK_MIN = 0.5;
 
 const str = (v) => (v == null ? '' : String(v)).trim();
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -207,9 +210,14 @@ function liveTimes(rt, leg, nowMin, untilMin) {
 
 /**
  * 출발 시각 D(분)에 나가면 어떻게 가는지 한 번 따라가 보기.
+ * '출발했어요!'(D가 지난 시각)일 때:
+ *   - pins[i]: 이미 탔다고 본 구간(탈 시각이 지남) — 그때 계산한 탑승 · 이동 시간을 그대로 씀(실시간 목록에는 지난 차가 없어서)
+ *   - 고정값이 없는데 표준 대기로도 이미 탔을 시각이 지난 구간 → 실시간을 쓰지 않음(실시간은 '지금부터 올 차'만 알려 줌)
+ *   (D가 지금 이후면 두 경우 모두 생기지 않아 지금까지와 같은 계산)
+ * @param {object} [o.pins]  { [구간 번호]: { board, ride, src, vehicle, approx, gate?, byTrip? } }
  * @returns {{ classArriveMin, legs: Array, gate }}
  */
-export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin }) {
+export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin, pins = null }) {
   const legs = route.legs, idx = transitIdx(legs), firstI = idx[0], lastI = idx[idx.length - 1];
   const until = untilMin ?? (D + 300);
   const firstTimes = rt?.first && rt.first.i === firstI ? liveTimes(rt.first, legs[firstI], nowMin, until) : null;
@@ -233,18 +241,27 @@ export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin
     // 앞 구간과 바로 이어지는 환승(도보 구간 없이 같은 역에서 갈아탐)에도 안전 여유
     if (i !== firstI && legs[i - 1]?.kind !== 'walk') { out.push({ i, kind: 'walk', start: t, end: t + TRANSIT.transferSafetyMin, min: 0, safety: TRANSIT.transferSafetyMin, transfer: true }); t += TRANSIT.transferSafetyMin; }
     const arrive = t;
-    let board = null, ride = leg.min, src = 'std', vehicle = leg.kind === 'bus' ? leg.no : leg.line, approx = false;
-    if (i === lastI && finalCands.length) {
-      const c = finalCands.find((x) => x.boardMin >= arrive - 1e-9);
-      if (c) { board = c.boardMin; ride = c.trip.inVehicleMin; src = c.live ? 'live' : 'term'; vehicle = c.trip.no; gate = c.trip.gate; finalByTrip = true; }
+    const pin = pins?.[i];
+    if (pin && Number.isFinite(pin.board) && Number.isFinite(pin.ride) && pin.board <= nowMin + PIN_LOCK_MIN) {
+      // 이미 탔다고 본 구간: 그때 계산한 값 그대로(마지막 버스면 하차 문 · 도보 계산도 그때와 같게)
+      if (i === lastI && pin.byTrip) { gate = pin.gate || null; finalByTrip = true; }
+      out.push({ i, kind: leg.kind, arrive, board: pin.board, end: pin.board + pin.ride, wait: pin.board - arrive, ride: pin.ride, src: pin.src || 'std', approx: Boolean(pin.approx), vehicle: pin.vehicle || (leg.kind === 'bus' ? leg.no : leg.line), pinned: true, ...(i === lastI && pin.byTrip ? { byTrip: true, gate: pin.gate || null } : {}) });
+      t = pin.board + pin.ride;
+      continue;
     }
-    if (board == null && i === firstI && firstTimes) {
+    const passed = arrive + stdWait(leg) <= nowMin; // 표준 대기로도 이미 탔을 시각(고정값 없음) → 실시간의 '다음 차'를 붙이지 않음
+    let board = null, ride = leg.min, src = 'std', vehicle = leg.kind === 'bus' ? leg.no : leg.line, approx = false, byTrip = false;
+    if (!passed && i === lastI && finalCands.length) {
+      const c = finalCands.find((x) => x.boardMin >= arrive - 1e-9);
+      if (c) { board = c.boardMin; ride = c.trip.inVehicleMin; src = c.live ? 'live' : 'term'; vehicle = c.trip.no; gate = c.trip.gate; finalByTrip = true; byTrip = true; }
+    }
+    if (!passed && board == null && i === firstI && firstTimes) {
       const need = arrive + (leg.kind === 'subway' ? TRANSIT.platformMin : 0);
       const c = firstTimes.find((x) => x.at >= need - 1e-9);
       if (c) { board = c.at; src = c.live ? 'live' : 'term'; approx = Boolean(c.approx); if (c.no) vehicle = c.no; }
     }
     if (board == null) { board = arrive + stdWait(leg); src = 'std'; }
-    out.push({ i, kind: leg.kind, arrive, board, end: board + ride, wait: board - arrive, ride, src, approx, vehicle });
+    out.push({ i, kind: leg.kind, arrive, board, end: board + ride, wait: board - arrive, ride, src, approx, vehicle, ...(byTrip ? { byTrip: true, gate } : {}) });
     t = board + ride;
   }
   const walkIn = walkToBuilding(walkTable, cls?.building, gate || '정문');
@@ -270,19 +287,25 @@ export function firstBoard(route, sim) {
  * @param {object} p
  * @param {object} p.route  parseOdsayPath 결과(저장한 경로)
  * @param {object|null} p.rt  실시간 { first: {i, kind, trains|buses}, final: {i, trips} } — 도착 예정(초)은 nowMin 기준
- * @returns {{ state, mode:'transit', cls, pick?, status?, slackMin?, departNow?, personalMin?, liveFirst?, liveFinal? }}
+ * @param {number|null} [p.departedMin]  v2.2 '출발했어요!'를 누른 시각(분) — 있으면 '지금 출발'로 다시 계산하지 않고 그 시각에 나갔다고 보고 끝까지
+ *   (수업이 시작된 뒤에도 도착 예정 시각까지는 'ok'로 안내)
+ * @param {object|null} [p.pins]  v2.2 이미 탔다고 고정한 구간(lockPins) — simulate 참고
+ * @returns {{ state, mode:'transit', cls, pick?, status?, slackMin?, departNow?, departed?, personalMin?, liveFirst?, liveFinal? }}
  */
-export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0 }) {
+export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0, departedMin = null, pins = null }) {
   if (!cls) return { state: 'no-class', mode: 'transit' };
   const start = toMin(cls.start);
-  if (nowMin >= start) return { state: 'started', mode: 'transit', cls };
-  if (!route?.legs?.length) return { state: 'no-trip', mode: 'transit', cls };
+  const departed = Number.isFinite(departedMin);
+  if (nowMin >= start && !departed) return { state: 'started', mode: 'transit', cls };
+  if (!route?.legs?.length) return { state: nowMin >= start ? 'started' : 'no-trip', mode: 'transit', cls };
   const personal = appliedOffset(personalOffsetMin);
-  const ctx = { cls, nowMin, rt, walkTable, untilMin: start + 60 };
+  // 출발한 뒤에는 수업 시작이 지나도 따라가므로 탈 수 있는 차 목록을 지금부터 2시간까지
+  const ctx = { cls, nowMin, rt, walkTable, untilMin: departed ? Math.max(start + 60, nowMin + 120) : start + 60, ...(departed && pins ? { pins } : {}) };
   const target = start - marginMin;
   const ok = (D) => simulate(route, D, ctx).classArriveMin + personal <= target + 1e-9;
   let D;
-  if (!ok(nowMin)) D = nowMin; // 지금 나가도 빠듯 · 늦음 → 지금 출발
+  if (departed) D = departedMin; // 누른 시각에 나갔다고 봄(지난 시각이어도) — 다시 '지금 출발'로 밀지 않음
+  else if (!ok(nowMin)) D = nowMin; // 지금 나가도 빠듯 · 늦음 → 지금 출발
   else {
     let lo = nowMin, hi = start;
     while (hi - lo > 0.02) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
@@ -293,12 +316,15 @@ export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMi
   }
   const sim = simulate(route, D, ctx);
   const arrive = sim.classArriveMin + personal;
+  // 출발한 날 수업이 시작된 뒤: 도착 예정 시각이 지나면 지금처럼 '수업이 시작됐어요'
+  if (nowMin >= start && arrive <= nowMin) return { state: 'started', mode: 'transit', cls };
   const slackMin = start - arrive;
   const status = slackMin >= marginMin ? 'relaxed' : slackMin >= 0 ? 'tight' : 'late';
   const fb = firstBoard(route, sim);
   return {
     state: 'ok', mode: 'transit', cls, classStartMin: start, status, slackMin, personalMin: personal,
-    departNow: D <= nowMin + 0.5,
+    departNow: !departed && D <= nowMin + 0.5,
+    ...(departed ? { departed: true, departedMin: D } : {}),
     pick: {
       departMin: D, boardMin: fb.boardMin, classArriveMin: arrive, live: fb.src === 'live',
       trip: { no: fb.no, label: fb.label, type: fb.typeLabel, color: fb.color, ink: fb.ink, kind: fb.kind, stop: fb.stop },
@@ -307,6 +333,49 @@ export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMi
     liveFirst: sim.legs.some((l) => l.kind !== 'walk' && l.src === 'live' && l.i === legEnds(route).first),
     liveFinal: sim.legs.some((l) => l.kind !== 'walk' && l.src !== 'std' && l.i === legEnds(route).last),
   };
+}
+
+/* ── v2.2 '출발했어요!' — 누른 시각에 나갔다고 보고 끝까지(사용자 위치는 모름 → 지남 · 타는 중은 예상) ── */
+const r3 = (v) => Math.round(v * 1000) / 1000;
+/** 저장한 경로를 알아보는 표(출발 기록이 다른 경로에 붙지 않게) — 화면 · 서버가 같은 값 */
+export function routeKey(route) {
+  const legs = route?.legs || [];
+  const parts = legs.filter((l) => l.kind !== 'walk').map((l) => `${l.kind === 'bus' ? str(l.no) : str(l.line)}@${str(l.from?.name)}`);
+  return parts.length ? `${parts.join('>')}#${legs.length}` : '';
+}
+/** [출발했어요!]를 보여 줄 때: 환승 계산이 'ok'이고 아직 안 눌렀고, 추천 출발 1시간 전부터(지금 출발이면 바로) — 수업 시작 뒤에는 'started'라 안 보임 */
+export function canDepart(plan, nowMin) {
+  return plan?.state === 'ok' && plan.mode === 'transit' && !plan.departed && Boolean(plan.pick)
+    && (plan.departNow || nowMin >= plan.pick.departMin - TRANSIT.departBeforeMin);
+}
+/**
+ * 누른 뒤 화면용: 탈 구간마다 지남(done) · 타는 중(riding) · 다음(next) · 그 뒤(later) — 누른 시각으로 계산한 예상
+ * @returns {{ byLeg: Object<number, 'done'|'riding'|'next'|'later'>, next: object|null, last: object|null } | null}
+ */
+export function departProgress(plan, nowMin) {
+  if (plan?.state !== 'ok' || !plan.departed) return null;
+  const legs = plan.pick.legs.filter((l) => l.kind !== 'walk');
+  const byLeg = {};
+  let next = null;
+  for (const s of legs) {
+    const st = s.end <= nowMin ? 'done' : s.board <= nowMin ? 'riding' : next ? 'later' : 'next';
+    if (st === 'next') next = s;
+    byLeg[s.i] = st;
+  }
+  return { byLeg, next, last: legs[legs.length - 1] || null };
+}
+/**
+ * 누른 뒤 '이미 탔음'으로 고정할 구간: 탈 시각이 30초 안으로 다가왔거나 지난 구간을 그때 값으로(이미 고정한 구간은 그대로).
+ * 화면이 이 값을 기기에 두었다가 planTransit({ pins })로 다시 넘김. 바뀐 게 없으면 prev를 그대로 돌려줌
+ */
+export function lockPins(plan, nowMin, prev = null) {
+  if (plan?.state !== 'ok' || !plan.departed) return prev;
+  let out = prev;
+  for (const s of plan.pick.legs) {
+    if (s.kind === 'walk' || out?.[s.i] || s.board > nowMin + PIN_LOCK_MIN) continue;
+    out = { ...(out || {}), [s.i]: { board: r3(s.board), ride: r3(s.ride), src: s.src, vehicle: s.vehicle, approx: Boolean(s.approx), ...(s.byTrip ? { byTrip: true, gate: s.gate || null } : {}) } };
+  }
+  return out;
 }
 
 /**

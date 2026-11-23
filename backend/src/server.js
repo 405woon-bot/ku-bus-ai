@@ -9,7 +9,7 @@ import { createCacheFromEnv } from './transit/cache.js';
 import { reasonText } from '../../shared/liveStatus.js';
 import { createPusher, pushSummary, sendAndLog, upsertSubscription, validSubscription } from './push.js';
 import { createScheduler } from './scheduler.js';
-import { planFor, walkTableFor } from './planner.js';
+import { departedMinFor, planFor, walkTableFor } from './planner.js';
 import { parseTimetableText } from '../../shared/parseTimetableText.js';
 import { BUILDINGS, GATES, WALK_TABLE, DEFAULT_WALK_MIN } from '../../shared/campusData.js';
 import { seoulParts, toHHMM, toMin } from '../../shared/time.js';
@@ -27,11 +27,12 @@ import { createSubwayService } from './transit/seoulSubway.js';
 import { transitLive } from './transit/transitLive.js';
 import { createNearKuFinder } from './transit/nearKu.js';
 import { createOdsayWarmer } from './transit/odsayWarm.js';
-import { NEARBY_REASONS, fallbackText } from '../../shared/transitPlan.js';
+import { NEARBY_REASONS, fallbackText, routeKey } from '../../shared/transitPlan.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 const HANDOFF_MS = 2 * 3600_000; // 홈 화면 앱 이어받기 코드 유효 시간(한 번만 쓰임)
+const DEPART_WINDOW_MIN = 240; // v2.2 '출발했어요!'를 받는 시간: 오늘 첫 수업 시작 4시간 전 ~ 시작 전(화면은 추천 출발 1시간 전부터 버튼을 보여 줌)
 const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
 /**
  * '도착했어요!'를 누른 시각(ms): 휴대폰 시계가 서버와 2분 안이면 누른 시각(pressedAt) 그대로 —
@@ -192,6 +193,37 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     res.json({ ok: true, ...personalOf(store.user(req.userId)) });
   });
 
+  // ── v2.2 '출발했어요!': 환승 경로로 안내 중인 날, 누른 시각을 오늘 출발 시각으로(하나만 저장) ──
+  //   → 화면 · 알림 계산이 '지금 출발'로 다시 밀지 않고 그 시각 기준으로 끝까지 따라감 · 그 수업의 출발 알림은 그만(planner.js)
+  //   오늘 첫 수업 · 저장한 환승 경로 · 시간(수업 시작 4시간 전 ~ 시작 전)은 서버 시각으로 다시 확인. 누른 시각은 도착 기록과 같은 규칙(arrivalTime)
+  const departureOf = (u) => ({ departure: u.departure || null });
+  app.post('/api/me/departure', (req, res) => {
+    const at = arrivalTime(req.body, now().getTime()), u = store.user(req.userId), p = seoulParts(new Date(at));
+    const cls = p.weekday < 5 ? firstClassOf(u.classes, p.weekday) : null;
+    if (!cls) return res.status(422).json({ error: '오늘은 등교할 수업이 없어요', kind: 'no-class', ...departureOf(u) });
+    const want = clean(req.body?.classId, 40);
+    if (want && want !== cls.id) return res.status(422).json({ error: '오늘 첫 수업이 바뀌었어요. 화면을 새로 고친 뒤 다시 눌러 주세요', kind: 'class-changed', ...departureOf(u) });
+    const route = u.transit?.mode === 'transit' ? u.transit.route : null;
+    if (!route?.legs?.length) return res.status(422).json({ error: '환승 경로로 안내 중일 때만 출발을 기록할 수 있어요', kind: 'no-route', ...departureOf(u) });
+    const rk = routeKey(route), wantRk = clean(req.body?.routeKey, 400);
+    if (wantRk && wantRk !== rk) return res.status(409).json({ error: '저장한 환승 경로가 바뀌었어요. 화면을 새로 고친 뒤 다시 눌러 주세요', kind: 'route-changed', ...departureOf(u) });
+    const start = toMin(cls.start);
+    if (!(p.minutes >= start - DEPART_WINDOW_MIN && p.minutes < start)) {
+      return res.status(422).json({ error: `출발 기록은 ${toHHMM(Math.max(0, start - DEPART_WINDOW_MIN))} ~ ${cls.start}(수업 시작 전)에만 할 수 있어요`, kind: 'outside-window', ...departureOf(u) });
+    }
+    const key = arrivalKey(p.dateKey, cls), old = u.departure;
+    if (old?.key === key && old.routeKey === rk) return res.json({ ok: true, already: true, ...departureOf(u) }); // 같은 누름을 다시 보냄(연결 끊김) → 처음 기록 그대로
+    store.update(req.userId, (x) => { x.departure = { key, at: new Date(at).toISOString(), departMin: Math.round(p.minutes * 1000) / 1000, routeKey: rk }; });
+    res.json({ ok: true, ...departureOf(store.user(req.userId)) });
+  });
+  // 잘못 누른 출발 기록 지우기 → 누르기 전처럼 다시 계산 · 알림
+  app.post('/api/me/departure/undo', (req, res) => {
+    const key = clean(req.body?.key, 80), u = store.user(req.userId);
+    if (!u.departure || u.departure.key !== key) return res.status(404).json({ error: '지울 출발 기록을 찾지 못했어요', kind: 'not-found', ...departureOf(u) });
+    store.update(req.userId, (x) => { x.departure = null; });
+    res.json({ ok: true, departure: null });
+  });
+
   // ── v2.0 출발지 환승 경로: ODsay 추천 경로(최대 3개) 고르기 · 저장 · 실시간(지하철 · 버스) ──
   //   검색은 오류를 내지 않고 { ok:false, fallback:'direct', reason, message }로 답함
   //   v2.1: 한도 초과 · ODsay 오류 때 30~90일 된 예전 경로가 있으면 { ok:true, stale:true, ageDays }(odsay.js),
@@ -248,7 +280,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     const p = seoulParts(now()), cls = p.weekday < 5 ? firstClassOf(u.classes, p.weekday) : null;
     try {
       // v2.1 화면 요청에는 경로 주변 돌발정보 · 날씨 · 마지막 국민대행 버스의 '왜 늦나요?'까지(직행과 같은 기준)
-      res.json(await transitLive({ route, provider, subway, nowDate: now(), cls, walkTable: walkTableFor(u), marginMin: u.prefs.marginMin, personalOffsetMin: u.personal?.offsetMin || 0, force: req.query.force === '1', extras: { incidents, weather, explainer } }));
+      res.json(await transitLive({ route, provider, subway, nowDate: now(), cls, walkTable: walkTableFor(u), marginMin: u.prefs.marginMin, personalOffsetMin: u.personal?.offsetMin || 0, force: req.query.force === '1', extras: { incidents, weather, explainer },
+        departedMin: departedMinFor(u, p.dateKey, cls) })); // v2.2 '출발했어요!'를 눌렀으면 그 시각 기준
     } catch (e) { res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
   });
 

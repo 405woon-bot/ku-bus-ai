@@ -3,6 +3,16 @@ import { api } from '../lib/api.js';
 import { emptyPersonal } from '@shared/arrival.js';
 
 /**
+ * v2.2 '출발했어요!' 기록: 서버 값이 정답. 같은 기록이면 이 기기에만 둔 '이미 탔음' 고정값(pins)은 그대로 두고,
+ * 서버에 없는데 이 기기에 아직 못 보낸 기록(pending)이 있으면 남겨 둠(useDeparture가 다시 보냄)
+ */
+export function mergeDeparture(server, local) {
+  const srv = server && typeof server === 'object' && server.key ? server : null;
+  if (srv) return { ...srv, ...(local && local.key === srv.key && local.routeKey === srv.routeKey && local.pins ? { pins: local.pins } : {}) };
+  return local?.pending ? local : null;
+}
+
+/**
  * (실서비스) 시간표·탑승 정류장·설정을 서버와 동기화 — 서버 스케줄러가 같은 값으로 푸시 알림을 보냅니다.
  * @returns {{ status:'off'|'loading'|'synced'|'error', pushSubscriptions:number }}
  */
@@ -19,7 +29,8 @@ export function useServerSync(state, dispatch, enabled) {
       // 내 걸음 반영 · 도착 기록은 서버가 정답(서버가 배우고 외부 DB에 저장) — 화면은 받아 두기만
       const learned = { personal: me.personal || emptyPersonal(), arrivals: Array.isArray(me.arrivals) ? me.arrivals : [],
         // v2.0 출발 방식 · 고른 환승 경로도 서버(외부 DB) 값이 정답
-        transit: me.transit ? { mode: me.transit.mode === 'transit' ? 'transit' : 'direct', origin: me.transit.origin || null, route: me.transit.route || null, savedAt: me.transit.savedAt || null, retry: me.transit.retry || null } : state.transit };
+        transit: me.transit ? { mode: me.transit.mode === 'transit' ? 'transit' : 'direct', origin: me.transit.origin || null, route: me.transit.route || null, savedAt: me.transit.savedAt || null, retry: me.transit.retry || null } : state.transit,
+        departure: mergeDeparture(me.departure, state.departure) };
       if (serverEmpty && (state.stop || state.classes.length)) {
         await api.saveTimetable(state.classes);
         await api.saveMe({ stop: state.stop, prefs: state.prefs, walkOverrides: state.walkOverrides });

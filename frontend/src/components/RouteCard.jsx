@@ -39,11 +39,23 @@ function SourceBit({ src, sample, minsLeft }) {
   return <span className="inline-flex h-5 items-center rounded bg-surface px-1.5 text-[11px] font-semibold text-ink-muted ring-1 ring-line">{src === 'term' ? '배차 간격 예상' : '예상'}</span>;
 }
 
+/** v2.2 '출발했어요!' 뒤 줄마다: 지남 · 타는 중(예상) · 다음 */
+const PROGRESS = {
+  done: { text: '지남', cls: 'bg-[#EFEFEF] text-[#777]' },
+  riding: { text: '타는 중(예상)', cls: 'bg-panel text-primary-active ring-[1.5px] ring-inset ring-primary-line' },
+  next: { text: '다음', cls: 'bg-primary text-white' },
+};
+function ProgressBit({ st }) {
+  const p = PROGRESS[st];
+  return p ? <span data-testid="leg-progress" className={`inline-flex h-5 items-center rounded px-1.5 text-[11px] font-bold ${p.cls}`}>{p.text}</span> : null;
+}
+
 /**
- * @param {{ route, plan?, badge?: string, liveTag?: 'live'|'std'|'sample'|null, classNote?: string, nowMin?: number, action?: any, testId?: string, sample?: boolean }} p
+ * @param {{ route, plan?, badge?: string, liveTag?: 'live'|'std'|'sample'|null, classNote?: string, nowMin?: number, action?: any, testId?: string, sample?: boolean, progress?: object|null }} p
  *   plan: planTransit 결과(있으면 그 시각들, 없으면 표준 대기로 0시 기준 상대 시각은 감춤)
+ *   progress: v2.2 departProgress().byLeg — 구간 번호 → 'done' | 'riding' | 'next' | 'later'(누른 시각으로 계산한 예상)
  */
-export default function RouteCard({ route, plan = null, badge = null, liveTag = null, classNote = '', nowMin = null, action = null, testId = 'route-card', sample = false }) {
+export default function RouteCard({ route, plan = null, badge = null, liveTag = null, classNote = '', nowMin = null, action = null, testId = 'route-card', sample = false, progress = null }) {
   const ok = plan?.state === 'ok';
   const sum = routeSummary(route, ok ? plan : null);
   const legsSim = ok ? plan.pick.legs : null;
@@ -55,7 +67,7 @@ export default function RouteCard({ route, plan = null, badge = null, liveTag = 
     if (leg.kind === 'walk') { pendingWalk += leg.min; const w = legsSim?.find((s) => s.i === i && s.kind === 'walk'); pendingSafety += w?.safety || 0; return; }
     const s = simOf(i);
     const extra = !legsSim && transitRows.length ? 3 : 0; // 표준 표시에서도 환승 여유를 밝힘
-    transitRows.push({ leg, s, walk: pendingWalk, safety: pendingSafety || extra, first: !transitRows.length });
+    transitRows.push({ leg, s, walk: pendingWalk, safety: pendingSafety || extra, first: !transitRows.length, st: progress?.[i] || null });
     pendingWalk = 0; pendingSafety = 0;
   });
   const lastLeg = transitRows.length ? transitRows[transitRows.length - 1].leg : null;
@@ -78,19 +90,20 @@ export default function RouteCard({ route, plan = null, badge = null, liveTag = 
       </p>
       <div className="mt-3"><ModeBar segments={sum.segments} /></div>
       <ol className="relative mt-4 grid grid-cols-1" aria-label="타고 갈 순서">
-        {transitRows.map(({ leg, s, walk, safety, first }, k) => {
+        {transitRows.map(({ leg, s, walk, safety, first, st }, k) => {
           const bus = leg.kind === 'bus';
           const label = bus ? leg.typeLabel : leg.line;
           const color = leg.color;
           const left = s && nowMin != null ? s.board - nowMin : null;
+          const done = st === 'done'; // 지난 구간: 흐리게 · 출처 대신 '지남'
           return (
-            <li key={k} data-kind={leg.kind} className="relative grid grid-cols-[76px_minmax(0,1fr)] gap-x-2 pb-3.5">
+            <li key={k} data-kind={leg.kind} data-progress={st || undefined} className="relative grid grid-cols-[76px_minmax(0,1fr)] gap-x-2 pb-3.5">
               <span aria-hidden="true" className="absolute bottom-0 left-[11px] top-6 w-[2px] bg-[#DDE2E8]" />
-              <span className="relative flex items-start gap-1.5 text-[14px] font-bold leading-6" style={{ color: inkOn(color) === '#FFFFFF' ? color : '#4B5565' }}>
+              <span className={`relative flex items-start gap-1.5 text-[14px] font-bold leading-6 ${done ? 'opacity-50' : ''}`} style={{ color: inkOn(color) === '#FFFFFF' ? color : '#4B5565' }}>
                 <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full" style={{ background: color, color: inkOn(color) }}>{bus ? <IconBus className="h-4 w-4" /> : <IconTrain className="h-4 w-4" />}</span>
                 <span className="truncate">{label}</span>
               </span>
-              <div className="min-w-0">
+              <div className={`min-w-0 ${done ? 'opacity-50' : ''}`}>
                 <p className="truncate text-[15.5px] font-semibold leading-6 text-ink">{stationName(leg, leg.from.name)}</p>
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13.5px] text-ink-muted">
                   {bus
@@ -99,7 +112,8 @@ export default function RouteCard({ route, plan = null, badge = null, liveTag = 
                     ))
                     : <span className="font-semibold text-ink">{leg.way ? `${leg.way} 방면` : leg.line}</span>}
                   {s && <span className="num font-semibold text-ink">{hhmm(s.board)} 탑승</span>}
-                  {s && <SourceBit src={s.src} sample={sample} minsLeft={left} />}
+                  {s && !done && <SourceBit src={s.src} sample={sample} minsLeft={left} />}
+                  {st && st !== 'later' && <ProgressBit st={st} />}
                 </p>
                 <p className="mt-0.5 text-[12px] text-ink-muted">
                   {first ? `출발 → 걸어서 ${Math.round(walk)}분` : `환승 · 걸어서 ${Math.round(walk)}분${safety ? ` + 여유 ${safety}분` : ''}`}

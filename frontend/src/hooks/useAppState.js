@@ -21,6 +21,9 @@ export const initialState = () => ({
   personal: emptyPersonal(),         // 내 걸음 반영(실서비스는 서버 값을 받아 둠)
   arrivals: [],                      // 최근 도착 기록(같은 날 같은 수업은 한 번)
   transit: emptyTransit(),           // v2.0 출발 방식: direct(단일 정류장 직행) | transit(출발지 환승 경로) + 고른 경로
+  // v2.2 '출발했어요!' 오늘 출발 기록 { key, at, departMin, routeKey, pins?, pending?, classId?, pressedAt? }
+  //   pins(이미 탔다고 본 구간의 그때 값)는 이 기기에만, pending은 아직 서버에 못 보낸 기록
+  departure: null,
   log: [],
 });
 
@@ -42,7 +45,8 @@ function reducer(s, a) {
     case 'restoreClasses': return { ...s, classes: a.classes };
     case 'setStop': return { ...s, stop: a.stop, fired: {} };
     case 'setPrefs': return { ...s, prefs: { ...s.prefs, ...a.patch } };
-    case 'setPreview': return { ...s, preview: { ...s.preview, ...a.patch, epoch: a.rearm ? s.preview.epoch + 1 : s.preview.epoch }, fired: a.rearm || a.clearFired ? {} : s.fired };
+    // 미리보기 시계를 되돌리거나 처음부터: 알림 기록 · '출발했어요!' 기록도 처음부터(누른 시각보다 앞으로 가면 맞지 않음)
+    case 'setPreview': return { ...s, preview: { ...s.preview, ...a.patch, epoch: a.rearm ? s.preview.epoch + 1 : s.preview.epoch }, fired: a.rearm || a.clearFired ? {} : s.fired, departure: a.rearm || a.clearFired ? null : s.departure };
     case 'alarmFired': {
       const cur = s.fired[a.key] || {};
       const slot = a.alarm.type === 'earlier' ? 'depart' : a.alarm.type;
@@ -50,10 +54,13 @@ function reducer(s, a) {
     }
     case 'transitSaved': return { ...s, transit: { ...emptyTransit(), ...(a.transit || {}) } };
     case 'arrivalSaved': return { ...s, personal: a.personal || emptyPersonal(), arrivals: Array.isArray(a.arrivals) ? a.arrivals : s.arrivals };
+    case 'departureSaved': return { ...s, departure: a.departure ? { ...a.departure } : null };
+    // 같은 출발 기록일 때만 '이미 탔음' 고정값을 바꿈
+    case 'departurePins': return s.departure && s.departure.key === a.key ? { ...s, departure: { ...s.departure, pins: a.pins || null } } : s;
     case 'hydrate': return { ...s, ...a.patch };
     case 'resetAll': return initialState();
     // 미리보기 전용: '처음 화면(출발지 묻기)' 보기 — 정류장 · 환승 경로를 비움(시간표는 그대로)
-    case 'previewFresh': return { ...s, stop: null, transit: emptyTransit(), fired: {} };
+    case 'previewFresh': return { ...s, stop: null, transit: emptyTransit(), departure: null, fired: {} };
     default: return s;
   }
 }

@@ -4,13 +4,21 @@ import { recommend, decideAlarms, firstClassOf } from '../../shared/recommend.js
 import { WALK_TABLE } from '../../shared/campusData.js';
 import { seoulParts, toMin } from '../../shared/time.js';
 import { arrivalKey } from '../../shared/arrival.js';
-import { planTransit } from '../../shared/transitPlan.js';
+import { planTransit, routeKey } from '../../shared/transitPlan.js';
 import { transitLive } from './transit/transitLive.js';
 
 export function walkTableFor(user) {
   const t = {};
   for (const [b, row] of Object.entries(WALK_TABLE)) t[b] = { ...row, ...(user.walkOverrides?.[b] || {}) };
   return t;
+}
+
+/** v2.2 오늘 이 수업 · 지금 저장한 환승 경로에 붙은 '출발했어요!' 기록의 출발 시각(분). 없거나 날짜 · 경로가 다르면 null */
+export function departedMinFor(user, dateKey, cls) {
+  const d = user?.departure, route = user?.transit?.route;
+  if (!d || !cls || !route || d.key !== arrivalKey(dateKey, cls) || d.routeKey !== routeKey(route)) return null;
+  const v = Number(d.departMin);
+  return Number.isFinite(v) ? v : null;
 }
 
 /**
@@ -45,17 +53,21 @@ export async function planFor(user, provider, nowDate = new Date(), { windowMin 
   return { now, cls, rec, live, alarms, key, mockData, arrived, mode: 'direct' };
 }
 
-/** 출발지 환승 경로 모드의 오늘 추천 + 지금 보낼 알림(직행과 같은 알림 규칙 · 기록 키는 ':transit'으로 따로) */
+/**
+ * 출발지 환승 경로 모드의 오늘 추천 + 지금 보낼 알림(직행과 같은 알림 규칙 · 기록 키는 ':transit'으로 따로)
+ * v2.2 '출발했어요!'를 눌렀으면: 그 시각 기준으로 계산하고, 그 수업의 출발 · 지각 알림은 더 보내지 않음(도착했어요와 같은 규칙)
+ */
 async function planTransitFor(user, provider, nowDate, now, cls, arrived, { windowMin, subway }) {
   // 알림 기록 키는 직행과 따로(':transit') — 하루 중에 출발 방식을 바꿔도 '앞당겨졌어요'가 잘못 울리지 않게(화면 useAlarms와 같은 키)
   const route = user.transit.route, key = cls ? `${now.dateKey}:${cls.id}:transit` : null;
   const start = cls ? toMin(cls.start) : NaN;
   const due = Boolean(cls) && now.minutes < start && start - now.minutes <= windowMin;
   const walkTable = walkTableFor(user), personalOffsetMin = user.personal?.offsetMin || 0, marginMin = user.prefs.marginMin;
-  const live = due ? await transitLive({ route, provider, subway, nowDate, cls, walkTable, marginMin, personalOffsetMin }) : null;
-  const rec = planTransit({ route, cls, nowMin: now.minutes, rt: live, walkTable, marginMin, personalOffsetMin });
-  const alarms = due && user.prefs.notify && rec.state === 'ok' && !arrived
+  const departedMin = departedMinFor(user, now.dateKey, cls), departed = departedMin != null;
+  const live = due ? await transitLive({ route, provider, subway, nowDate, cls, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
+  const rec = planTransit({ route, cls, nowMin: now.minutes, rt: live, walkTable, marginMin, personalOffsetMin, departedMin });
+  const alarms = due && user.prefs.notify && rec.state === 'ok' && !arrived && !departed
     ? decideAlarms({ rec, nowMin: now.minutes, fired: user.fired[key] || {}, notifyBeforeMin: user.prefs.notifyBeforeMin })
     : [];
-  return { now, cls, rec, live, alarms, key, mockData: false, arrived, mode: 'transit' };
+  return { now, cls, rec, live, alarms, key, mockData: false, arrived, departed, mode: 'transit' };
 }

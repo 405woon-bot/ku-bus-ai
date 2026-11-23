@@ -381,6 +381,27 @@ with sync_playwright() as p:
     check("[환승] v2.1 홈 '왜 늦나요?'(직행과 같은 기준): 마지막 버스 171번 · 노란 줄 · AI 문장 · +11분 · 근거", why.count() == 1 and flat(pg.get_by_test_id('why-who').inner_text()) == '마지막 버스 171번'
           and why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai' and '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' in wt and '+11분' in wt and '근거' in wt, wt[:160])
     pg.screenshot(path=str(OUT / 'live_iphone13_transit_why.png'))
+    # v2.2 '출발했어요!': 누르면 서버(외부 DB)에 오늘 출발 기록 → 이동 중 카드 · 서버 계산도 누른 시각 기준 · 출발 알림 그만 → 잘못 눌렀어요로 지움
+    pg.evaluate('window.scrollTo(0, 0)'); pg.wait_for_timeout(200)
+    dbtn = pg.get_by_test_id('depart-button')
+    check('[환승] v2.2 출발 카드에 [출발했어요!](추천 출발 1시간 전 ~ 수업 시작 전)', dbtn.count() == 1, flat(pg.locator('section[aria-label="출발 추천"]').inner_text())[:120])
+    dbtn.click()
+    pg.get_by_test_id('departed-hero').wait_for(timeout=8000)
+    pg.wait_for_function("() => !(document.querySelector('[data-testid=\"depart-note\"]')?.innerText || '').includes('보내는 중')", timeout=8000)
+    me = api(ctx, 8801, uid4, 'GET', '/api/me'); d = me.get('departure') or {}
+    hero = flat(pg.get_by_test_id('departed-hero').inner_text())
+    check('[환승] v2.2 누르면: 서버에 오늘 출발 기록(오늘 첫 수업 · 저장한 경로) · 이동 중 카드 · 다음 탈 것', str(d.get('key', '')).startswith('2026-11-09:') and '171' in d.get('routeKey', '')
+          and f"이동 중 · {hhmm(d.get('departMin', 0))} 출발" in hero and '탑승' in hero and '잘못 눌렀어요' in hero, f"{d} / {hero}")
+    plan2 = api(ctx, 8801, uid4, 'GET', '/api/plan')
+    check('[환승] v2.2 서버 계산(알림)도 누른 시각 기준 · 출발 알림 없음', plan2['rec'].get('departed') is True and abs(plan2['rec']['pick']['departMin'] - d.get('departMin', -1)) < 0.01 and plan2['alarmsDue'] == [],
+          f"{plan2['rec'].get('departed')} {plan2['alarmsDue']}")
+    dl2 = flat(pg.get_by_test_id('data-line').inner_text())
+    check('[환승] v2.2 데이터 줄: HH:MM 출발 기준', f"{hhmm(d.get('departMin', 0))} 출발 기준" in dl2, dl2)
+    pg.screenshot(path=str(OUT / 'live_iphone13_departed.png'))
+    pg.get_by_test_id('depart-undo').click(); pg.get_by_test_id('depart-undo-yes').click()
+    pg.get_by_test_id('depart-button').wait_for(timeout=8000)
+    me = api(ctx, 8801, uid4, 'GET', '/api/me')
+    check('[환승] v2.2 잘못 눌렀어요 → 서버 기록도 지움 · 버튼 다시', me.get('departure') is None and pg.get_by_test_id('departed-hero').count() == 0, str(me.get('departure')))
     # 하루 상한(e2e 서버 3건): 새 출발지 2건을 더 찾으면 3/3 → 새 출발지는 '내일부터' + 근처 국민대행 정류장(저장한 경로는 그대로)
     for o in ({'lat': 37.5665, 'lon': 126.9780, 'name': '시청', 'kind': 'stop'}, {'lat': 37.5133, 'lon': 127.1001, 'name': '잠실', 'kind': 'stop'}):
         api(ctx, 8801, uid4, 'POST', '/api/transit/search', o)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { firstClassOf, recommend } from '@shared/recommend.js';
-import { planTransit } from '@shared/transitPlan.js';
+import { canDepart, lockPins, planTransit } from '@shared/transitPlan.js';
 import { WALK_TABLE } from '@shared/campusData.js';
 import { MODE, useAppState } from './hooks/useAppState.js';
 import { useNow } from './hooks/useNow.js';
@@ -15,6 +15,7 @@ import { attachHandoffToUrl } from './lib/identity.js';
 import { usePush } from './hooks/usePush.js';
 import { useKCard } from './hooks/useKCard.js';
 import { useArrival } from './hooks/useArrival.js';
+import { useDeparture } from './hooks/useDeparture.js';
 import { colorIndexFor } from './lib/palette.js';
 import { courseToClasses } from '@shared/courses.js';
 import { Header, PreviewBar, TabBar, TABS } from './components/AppShell.jsx';
@@ -109,18 +110,29 @@ export default function App({ handoff = null }) {
   const nowKey = Math.floor(now.minutes * 12); // 5초 단위로 다시 계산
   const { walkToStopMin, marginMin } = state.prefs;
   const personalOffsetMin = state.personal?.offsetMin || 0; // '도착했어요!'로 배운 내 걸음 반영(서버 알림도 같은 값)
+  // v2.2 '출발했어요!'(환승 경로만): 누른 시각에 나갔다고 보고 끝까지 계산 — 이미 탔다고 본 구간은 그때 값으로 고정(pins, 이 기기에만)
+  const departure = useDeparture({ mode: MODE, state, dispatch, now, todayClass, route: transitOn ? tr.route : null, ready: MODE !== 'api' || sync.status === 'synced' });
+  const departedMin = transitOn ? departure.departedMin : null;
   // 환승 경로의 실시간 재료(첫 지하철 · 버스, 마지막 국민대행 버스) — 서버가 지하철은 출발 30분 전부터만 받아 옴
-  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin, preview: MODE === 'sample' ? state.preview : null });
+  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin, departedMin, preview: MODE === 'sample' ? state.preview : null });
   const rec = useMemo(() => {
-    if (transitOn) return planTransit({ route: tr.route, cls: todayClass, nowMin: now.minutes, rt: tlive.rt, walkTable, marginMin, personalOffsetMin });
+    if (transitOn) return planTransit({ route: tr.route, cls: todayClass, nowMin: now.minutes, rt: tlive.rt, walkTable, marginMin, personalOffsetMin, departedMin, pins: departure.pins });
     return state.stop ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin }) : null;
   },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [transitOn, tr.route, tlive.rt, state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin]);
+  [transitOn, tr.route, tlive.rt, state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin, departedMin, departure.pins]);
+  // 누른 뒤: 탈 시각이 된 구간을 '이미 탔음'으로 고정(실시간 목록에서 그 차가 빠져도 도착 예정이 흔들리지 않게)
+  useEffect(() => {
+    if (!rec?.departed) return;
+    const next = lockPins(rec, now.minutes, departure.pins);
+    if (next !== departure.pins) departure.savePins(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rec]);
   // '도착했어요!' · K•CARD+ 캡처(이 기기에만) — 앱을 열 때 이미지를 미리 읽어 두어 누르면 바로 띄움
   const kcard = useKCard();
   const arrival = useArrival({ mode: MODE, state, dispatch, now, todayClass, ready: MODE !== 'api' || sync.status === 'synced' });
-  const alarms = useAlarms({ rec, now, fired: state.fired, dispatch, prefs: state.prefs, mockData, arrived: Boolean(arrival.record) });
+  // 도착 · 출발을 기록했으면 그 수업의 출발 · 지각 알림은 더 띄우지 않음(서버 푸시도 같은 규칙)
+  const alarms = useAlarms({ rec, now, fired: state.fired, dispatch, prefs: state.prefs, mockData, arrived: Boolean(arrival.record) || Boolean(departedMin != null) });
 
   const [perm, setPerm] = useState(notifyPermission);
   // 기기 구분(미리보기는 '기기 보기' 단추로 고른 가상 기기) → 백그라운드 알림 · 아이폰 홈 화면 추가 안내
@@ -191,6 +203,7 @@ export default function App({ handoff = null }) {
         {tab === 'home' && (
           <HomeScreen mode={MODE} syncing={sync.status === 'loading'} stop={state.stop} rec={rec} live={live} now={now} nextClass={nextClass} hasClasses={state.classes.length > 0}
             arrival={{ ...arrival, cls: todayClass }} kcardReady={kcard.status === 'ready'} personal={state.personal}
+            departure={{ ...departure, can: transitOn && !arrival.record && canDepart(rec, now.minutes) }}
             transit={{ on: transitOn, pending: tr.mode === 'transit' && !transitOn, retry: tr.retry || null, origin: tr.origin, route: tr.route, live: tlive }} onOpenTransit={goTransit}
             renderFinder={(wrap) => <OriginFinder mode={MODE} state={state} dispatch={dispatch} now={now} todayClass={todayClass} nextClass={nextClass} walkTable={walkTable} wrap={wrap} onDone={toTop} />}
             onPickStop={() => setDialog({ type: 'stop' })} onGoTimetable={() => go('timetable')} />

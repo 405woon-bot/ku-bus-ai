@@ -59,6 +59,9 @@ export const api = {
   arrival: (body) => req('POST', '/api/me/arrival', body),
   arrivalUndo: (key) => req('POST', '/api/me/arrival/undo', { key }),
   personalReset: () => req('POST', '/api/me/personal/reset', {}),
+  // v2.2 '출발했어요!' — 누른 시각을 오늘 출발 시각으로(서버가 시각 · 수업 · 경로를 다시 확인) · 잘못 눌렀으면 지우기
+  departure: (body) => req('POST', '/api/me/departure', body),
+  departureUndo: (key) => req('POST', '/api/me/departure/undo', { key }),
   // v2.0 출발지 환승 경로(ODsay) — 검색은 오류 대신 { ok:false, fallback:'direct' }로 답함
   transitSearch: (body) => req('POST', '/api/transit/search', body),
   transitSave: (searchId, pathId) => req('POST', '/api/me/transit', { searchId, pathId }),
