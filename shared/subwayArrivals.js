@@ -75,29 +75,38 @@ const recptnMs = (s) => { const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})
 const BY_CODE = { 3: 45, 4: 75, 5: 60 }; // 전역 출발 · 전역 진입 · 전역 도착
 
 /**
+ * v2.4.1 한 줄의 남은 시간을 어떻게 구하는지 — parseSubwayRow와 /api/subway/test가 같은 코드
+ * @returns {{ how: 'departed'|'stale'|'seconds'|'arrive'|'message'|'stationsAway'|'code'|'unknown', eta: number|null, approx: boolean }}
+ *   departed(떠남) · stale(5분 넘게 지난 기록) · unknown(구할 수 없음)은 eta null → 쓰지 않음
+ *   seconds = barvlDt(남은 초) · arrive = 도착/진입(0초) · message = 'N분 M초 후' 문구 · stationsAway = '[n]번째 전역'(n × 90초) · code = 전역 출발/진입/도착(45/75/60초)
+ */
+export function rowEta(r, fetchedMs) {
+  const code = num(r?.arvlCd);
+  if (code === 2) return { how: 'departed', eta: null, approx: false };
+  const at = recptnMs(r?.recptnDt);
+  let age = at != null && fetchedMs != null ? (fetchedMs - at) / 1000 : 0;
+  if (age > 300) return { how: 'stale', eta: null, approx: false };
+  if (!(age >= 0)) age = 0;
+  const msg = str(r?.arvlMsg2), dt = num(r?.barvlDt);
+  if (dt > 0) return { how: 'seconds', eta: dt - age, approx: false };
+  if (code === 0 || code === 1) return { how: 'arrive', eta: 0, approx: false };
+  const m = /(?:(\d+)\s*분)?\s*(?:(\d+)\s*초)?\s*후/.exec(msg);
+  if (m && (m[1] || m[2])) return { how: 'message', eta: Number(m[1] || 0) * 60 + Number(m[2] || 0) - age, approx: false };
+  const k = /\[?(\d+)\]?\s*번째\s*전역/.exec(msg);
+  if (k) return { how: 'stationsAway', eta: Number(k[1]) * 90 - age, approx: true };
+  if (BY_CODE[code]) return { how: 'code', eta: BY_CODE[code] - age, approx: true };
+  return { how: 'unknown', eta: null, approx: false };
+}
+
+/**
  * 한 줄 → { subwayId, updn, next(방면 역), dest(종착), etaSec(받은 시각 기준), approx, express, type(열차 종류 원문), last, code, msg }
- * 떠난 열차(arvlCd 2)와 5분 넘게 지난 기록은 null
+ * 떠난 열차(arvlCd 2)와 5분 넘게 지난 기록은 null (남은 시간 규칙은 rowEta)
  */
 export function parseSubwayRow(r, fetchedMs) {
   const code = num(r?.arvlCd);
-  if (code === 2) return null;
-  const at = recptnMs(r?.recptnDt);
-  let age = at != null && fetchedMs != null ? (fetchedMs - at) / 1000 : 0;
-  if (age > 300) return null;
-  if (!(age >= 0)) age = 0;
-  const msg = str(r?.arvlMsg2), dt = num(r?.barvlDt);
-  let eta = null, approx = false;
-  if (dt > 0) eta = dt - age;
-  else if (code === 0 || code === 1) eta = 0;
-  else {
-    const m = /(?:(\d+)\s*분)?\s*(?:(\d+)\s*초)?\s*후/.exec(msg);
-    if (m && (m[1] || m[2])) eta = Number(m[1] || 0) * 60 + Number(m[2] || 0) - age;
-    else {
-      const k = /\[?(\d+)\]?\s*번째\s*전역/.exec(msg);
-      if (k) { eta = Number(k[1]) * 90 - age; approx = true; } else if (BY_CODE[code]) { eta = BY_CODE[code] - age; approx = true; }
-    }
-  }
+  const { eta, approx } = rowEta(r, fetchedMs);
   if (eta == null) return null;
+  const msg = str(r?.arvlMsg2);
   const line = str(r?.trainLineNm);
   return {
     subwayId: str(r?.subwayId), updn: str(r?.updnLine), next: (/[-–]\s*(.+?)\s*방면/.exec(line) || [])[1] || '',

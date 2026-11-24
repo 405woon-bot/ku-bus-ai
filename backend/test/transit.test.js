@@ -138,7 +138,7 @@ test('실시간 지하철: http 주소 · 역 이름 인코딩 · 30초 캐시 �
   const svc = createSubwayService({ env: { SEOUL_SUBWAY_KEY: SUBWAY_TEST_KEY }, fetchImpl: f, clock: () => t, log: quiet });
   const a = await svc.arrivals('홍대입구');
   assert.deepEqual([a.source, a.rows.length, a.rows[0].next, a.rows[0].etaSec], ['seoul', 2, '신촌', 150]);
-  assert.ok(f.calls[0].raw.startsWith(`http://swopenapi.seoul.go.kr/api/subway/${SUBWAY_TEST_KEY}/json/realtimeStationArrival/0/20/%ED%99%8D`));
+  assert.ok(f.calls[0].raw.startsWith(`http://swopenapi.seoul.go.kr/api/subway/${SUBWAY_TEST_KEY}/json/realtimeStationArrival/0/40/%ED%99%8D`));
   await svc.arrivals('홍대입구');
   assert.equal(f.calls.length, 1, '30초 안에는 캐시');
   t += 31_000;

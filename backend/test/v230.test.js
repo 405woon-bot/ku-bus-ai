@@ -193,8 +193,10 @@ test('API: GET /api/subway/test 연결 · /api/health seoulSubway 새 항목(lin
 
 test('summarizeTest: 줄 수가 20이면 full(잘렸을 수 있음) · 번호 없는 줄 · 긴 값은 잘라서', () => {
   const ms = kst('2026-11-24T13:00:00').getTime();
-  const s = summarizeTest([{ station: '서울', status: 'ok', rows: [...Array(19).fill(row(ms)), row(ms, { subwayId: '', trainLineNm: 'x'.repeat(200) })] }]);
-  assert.deepEqual([s.stations[0].full, s.lines['(빈 번호)'].rows, s.lines['(빈 번호)'].sample.trainLineNm.length, s.unknownIds], [true, 1, 40, ['(빈 번호)']]);
+  const s = summarizeTest([{ station: '서울', status: 'ok', asked: 20, rows: [...Array(19).fill(row(ms)), row(ms, { subwayId: '', trainLineNm: 'x'.repeat(200) })] }], ms);
+  assert.deepEqual([s.stations[0].full, s.stations[0].asked, s.lines['(빈 번호)'].rows, s.lines['(빈 번호)'].sample.trainLineNm.length, s.unknownIds], [true, 20, 1, 40, ['(빈 번호)']]);
+  const s40 = summarizeTest([{ station: '서울', status: 'ok', asked: 40, rows: Array(20).fill(row(ms)) }], ms);
+  assert.equal(s40.stations[0].full, undefined, 'v2.4.1: 40줄을 물었는데 20줄이면 잘린 것이 아님');
   // 바깥 값이 객체 기본 이름이어도 섞이지 않음(번호는 숫자만, 열차 종류는 그대로 한 칸)
   const odd = summarizeTest([{ station: '서울', status: 'ok', rows: [row(ms, { subwayId: '__proto__', btrainSttus: '__proto__' }), row(ms, { btrainSttus: 'constructor' })] }]);
   assert.deepEqual(Object.keys(odd.lines).sort(), ['(형식이 다른 번호)', '1001']);

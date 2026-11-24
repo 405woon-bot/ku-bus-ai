@@ -713,6 +713,10 @@ with sync_playwright() as p:
           hg['keyConfigured'] is True and hg['stage'] == 'G1' and hg['cap'] == 900 and hg['cacheSec'] == 30 and hg['callsToday'] == {'station': 3, 'arrival': 1, 'route': 1}
           and hg['test']['runsToday'] == 1 and hg['test']['maxPerDay'] == 3 and g12['ok'] is False and g12['reason'] in ('no-service', 'no-key') and hg2['keyConfigured'] is False,
           json.dumps({'hg': hg, 'g12': g12, 'hg2': hg2}, ensure_ascii=False)[:300])
+
+    # ⑫ v2.4.1(8801): 서울시 실시간 지하철 한 번에 40줄 · 되돌린 적 없음(rowsFallback 없음) · 확인 도구도 40줄로 물음 · 2호선 첫 지하철 실시간은 위 [환승] 검사에서 그대로 확인
+    check('[v2.4.1] 실시간 지하철 40줄: health rows 40 · rowsFallback 없음 · /api/subway/test rowsAsked 40',
+          h10['rows'] == 40 and h10['rowsFallback'] is None and t10['rowsAsked'] == 40, json.dumps({'rows': h10.get('rows'), 'rowsFallback': h10.get('rowsFallback'), 'rowsAsked': t10.get('rowsAsked')}))
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)
