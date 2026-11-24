@@ -5,8 +5,10 @@
 //   예시(모의) 데이터는 섞지 않음 → 받지 못하면 source로 알리고 계산은 ODsay 표준 대기 시간으로(화면에 '예상')
 //   v2.1(화면 요청에만, extras): 경로 주변 돌발정보 · 국민대 날씨 · 마지막 국민대행 버스의 '왜 늦나요?'(직행과 같은 기준 · 같은 코드)
 //     돌발정보 경로 = 마지막 버스(서울시 경유 정류장) + 그 밖의 버스 구간(ODsay 경유 정류장 좌표가 있으면). 지하철 구간은 도로가 아니라 뺌
+//   v2.3.0 첫 지하철이 실시간 허용 목록(19개 노선) 밖이거나 비상 끄기(SEOUL_SUBWAY_OFF_LINES)로 끈 노선이면 서울시를 부르지 않고
+//     처음부터 '실시간 없음'(배차로 예상) — 끝까지 오지 않을 실시간을 '출발 30분 전부터'라고 안내하지 않게. 열차는 노선 묶음별 규칙으로 고름
 import { legEnds, planTransit, wantsLive } from '../../../shared/transitPlan.js';
-import { trainsForLeg } from '../../../shared/subwayArrivals.js';
+import { liveSupport, trainsForLeg } from '../../../shared/subwayArrivals.js';
 import { seoulParts } from '../../../shared/time.js';
 import { delayMinutes } from '../../../shared/explain.js';
 
@@ -55,16 +57,23 @@ export async function transitLive({ route, provider, subway, nowDate = new Date(
     }
   }
   if (F?.kind === 'subway') {
+    // v2.3.0 허용 목록 밖('line') · 비상 끄기('off'): 호출 없이 '실시간 없음' — 시간과 상관없이(30분 창 확인보다 먼저)
+    const sup = liveSupport(F, subway?.offLines);
     // v2.2 '출발했어요!'를 눌렀으면 그 출발 시각 기준(출발 30분 전 ~ 20분 뒤에만 지하철 실시간)
-    const std = cls ? planTransit({ route, cls, nowMin, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
-    if (!force && !wantsLive(std, nowMin)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
+    const std = sup.ok && cls ? planTransit({ route, cls, nowMin, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
+    if (!sup.ok) {
+      subway?.countSkip?.(sup.reason);
+      out.first = { i: first, kind: 'subway', source: 'nodata', reason: sup.reason, station: F.from.name, trains: [] };
+    } else if (!force && !wantsLive(std, nowMin)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
     else if (!subway) out.first = { i: first, kind: 'subway', source: 'off', reason: 'no-service', station: F.from.name, trains: [] };
     else {
       jobs.push(subway.arrivals(F.from.name).then((r) => {
         const age = r.fetchedAt ? Math.max(0, (nowMs - Date.parse(r.fetchedAt)) / 1000) : 0;
+        const drops = {}; // 뺀 이유(열차 종류 · 번호 빈 줄 · 방향 모름 · 하차역 전에 끝남) — /api/health에는 합계만(노선 · 역 이름 없이)
         const trains = r.source === 'seoul'
-          ? trainsForLeg(r.rows, F).map((t) => ({ etaSec: Math.round(t.etaSec - age), approx: t.approx, dest: t.dest, last: t.last })).filter((t) => t.etaSec > -30).slice(0, 4)
+          ? trainsForLeg(r.rows, F, drops).map((t) => ({ etaSec: Math.round(t.etaSec - age), approx: t.approx, dest: t.dest, last: t.last })).filter((t) => t.etaSec > -30).slice(0, 4)
           : [];
+        if (r.source === 'seoul') subway.countFiltered?.(drops);
         const none = r.source === 'seoul' && !trains.length;
         out.first = { i: first, kind: 'subway', source: none ? 'nodata' : r.source, reason: none ? 'no-train' : r.reason || null, station: r.station || F.from.name, trains };
       }, (e) => { out.first = { i: first, kind: 'subway', source: 'error', reason: e?.message || 'api', trains: [] }; }));

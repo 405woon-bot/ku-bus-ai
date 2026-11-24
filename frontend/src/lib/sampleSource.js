@@ -12,7 +12,7 @@ import { sampleNcstItems } from '@shared/samples/weatherSample.js';
 import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, josa, josaWa, ruleText } from '@shared/explain.js';
 import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, isLateNight, legEnds, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
 import { SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
-import { exampleSubwayJson, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
+import { exampleSubwayJson, liveSupport, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
 
 export { SAMPLE_COURSE_META };
 /** 미리보기 수업 검색: 샘플 강의에서 찾음(실제 강의 목록 아님) */
@@ -160,7 +160,9 @@ export function sampleTransitLive(route, now, { cls, walkTable, marginMin, perso
   }
   if (F?.kind === 'subway') {
     const std = cls ? planTransit({ route, cls, nowMin: m, walkTable, marginMin, personalOffsetMin, departedMin }) : null; // v2.2 출발했으면 그 시각 기준(서버와 같음)
-    if (!wantsLive(std, m)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
+    const sup = liveSupport(F); // v2.3.0 서버와 같음: 실시간 허용 목록(19개 노선) 밖이면 처음부터 '실시간 없음'(배차로 예상)
+    if (!sup.ok) out.first = { i: first, kind: 'subway', source: 'nodata', reason: sup.reason, station: F.from.name, trains: [] };
+    else if (!wantsLive(std, m)) out.first = { i: first, kind: 'subway', source: 'skip', reason: 'not-yet', station: F.from.name, trains: [] };
     else {
       const at = Math.floor(Date.now() / 1000) * 1000; // 받은 시각을 초 단위로(문자열 시각과 맞춰 1초 미만 흔들림 없게)
       const head = (F.intervalMin || 5) + (preview.explain === 'gap' ? 4 : 0), next = cycle(m, head, 1); // 'gap': 열차 간격이 배차간격 + 4분(지연 예시)

@@ -682,6 +682,21 @@ with sync_playwright() as p:
           h9['nearKu']['maxStops'] == 6 and h9['nearKu']['show'] == 3 and h9['nearKu']['night'] == 0 and h9['explain']['timeoutMs'] == 4000 and h9['explain']['waitMs'] == 1200
           and isinstance(h9['explain']['rejected'], dict) and h9['explain']['rejected'].get('causal', 0) == 0 and 'E2E-GEMINI-KEY' not in json.dumps(h9),
           json.dumps({'nearKu': h9['nearKu'], 'explain': {k: h9['explain'][k] for k in ('timeoutMs', 'waitMs', 'rejected')}}, ensure_ascii=False)[:300])
+
+    # ⑩ v2.3.0(8801): 실시간 지하철 허용 목록 19개 · 확인 도구 /api/subway/test(가짜 서울시에는 시험 역 열차가 없어 모두 '없음') · 10분 보관 ·
+    #   /api/health 새 항목(역 · 노선 이름 없이 합계만) · 키는 어디에도 안 나옴. 환승 경로(2호선)의 첫 지하철 실시간은 위 [환승] 검사에서 그대로 확인
+    c10 = b.new_context()
+    t10 = api(c10, 8801, 'x', 'GET', '/api/subway/test'); t10b = api(c10, 8801, 'x', 'GET', '/api/subway/test')
+    h10 = api(c10, 8801, 'x', 'GET', '/api/health')['seoulSubway']; c10.close()
+    check('[v2.3.0] /api/subway/test: 고정 역 8곳(서울 … 수서) · 모두 없음이면 ok false(nodata) · 경강선은 시험 역 없음 · 허용 목록 19 · 다시 열면 보관한 결과 · 키 없음',
+          t10['ok'] is False and t10['reason'] == 'nodata' and [s['station'] for s in t10['stations']] == ['서울', '왕십리', '상봉', '강남', '성신여대입구', '김포공항', '신림', '수서']
+          and all(s['status'] == 'nodata' for s in t10['stations']) and t10['check']['1081']['result'].startswith('시험 역 없음') and t10['check']['1065']['result'].startswith('안 보임')
+          and t10['allow'] == {'total': 19, 'on': 19, 'off': []} and t10['runsToday'] == 1 and t10b['cached'] is True and 'SUBWAY-TEST-KEY' not in json.dumps(t10),
+          json.dumps({k: t10.get(k) for k in ('ok', 'reason', 'runsToday', 'allow')}, ensure_ascii=False)[:300])
+    check('[v2.3.0] /api/health seoulSubway: 19개 노선 켬 · 오늘 시험 1번(하루 3번) · 열차를 뺀 횟수 · 목록 밖이라 부르지 않은 횟수 · 역 · 노선 이름 없음 · 키 없음',
+          h10['lines'] == {'total': 19, 'on': 19, 'off': []} and h10['test']['runsToday'] == 1 and h10['test']['maxPerDay'] == 3
+          and set(h10['filtered']) == {'line', 'dir', 'type', 'dest'} and h10['skipped'] == {'line': 0, 'off': 0}
+          and '서울' not in json.dumps(h10, ensure_ascii=False) and 'SUBWAY-TEST-KEY' not in json.dumps(h10), json.dumps(h10, ensure_ascii=False)[:300])
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)
