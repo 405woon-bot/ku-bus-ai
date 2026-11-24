@@ -11,7 +11,7 @@ import { sendAndLog } from './push.js';
 export const MOCK_NOTE = ' (예시 교통 데이터 기준 · 실시간 아님)';
 const SEVERITY = { danger: 2, warn: 1 };
 
-export function createScheduler({ store, provider, pusher, now = () => new Date(), intervalMs = 60000, windowMin = 180, pushWhenMock = 'label', log = console, subway = null, warmer = null }) {
+export function createScheduler({ store, provider, pusher, now = () => new Date(), intervalMs = 60000, windowMin = 180, pushWhenMock = 'label', log = console, subway = null, gyeonggi = null, warmer = null }) {
   let timer = null, running = false;
   const stats = { lastTickAt: null, ticks: 0, sent: 0, skippedMock: 0, lastError: null };
   async function tick() {
@@ -23,7 +23,7 @@ export function createScheduler({ store, provider, pusher, now = () => new Date(
     try {
       for (const [userId, user] of store.users()) {
         try {
-          const { alarms, key, mockData } = await planFor(user, provider, now(), { windowMin, subway });
+          const { alarms, key, mockData } = await planFor(user, provider, now(), { windowMin, subway, gyeonggi });
           if (!alarms.length) continue;
           if (store.peek && store.peek(userId) === undefined) continue; // v2.2.4 계산하는 사이 지워진 사용자(90일 자동 삭제)
           if (mockData && pushWhenMock === 'skip') { stats.skippedMock += alarms.length; continue; }

@@ -2,6 +2,7 @@
 // 8801의 푸시는 실제 푸시 서버로 보내지 않고, 0.3초 뒤 '휴대폰 서비스 워커가 받았다'고 /api/push/ack를 대신 불러 수신 확인 흐름을 시험합니다.
 // v2.0: 8801에 가짜 ODsay(하루 상한 3건으로 줄여 '한도 초과'까지) · 가짜 서울시 실시간 지하철. 8802는 키 없음
 // v2.4.0: 8801에 가짜 경기도 버스 API(G1 확인 도구 /api/gyeonggi/test), 8802는 경기도 키 없음
+// v2.5.0: 8801에 첫 버스가 경기도 정류장(가짜 수원역)인 저장 경로를 가진 e2e 사용자 둘(G2 경기도 첫 버스 실시간 · 출발 30분 전부터)
 // v2.1: 두 서버 모두 '근처 국민대행 정류장 찾기'(nearKu) — 8801은 가짜 서울시 정류소정보(정릉시장 08901), 8802는 키 없음(지어내지 않음)
 // 실행: node scripts/e2eServer.js   (frontend/dist가 먼저 빌드되어 있어야 함)
 import webpush from 'web-push';
@@ -20,6 +21,7 @@ import { fakeGeminiFetch } from '../test/fixtures/geminiFixture.js';
 import { createExplainService } from '../src/transit/geminiExplain.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '../../shared/samples/sampleCourses.js';
 import { SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
+import { parseOdsayResult } from '../../shared/transitPlan.js';
 import { createKv } from '../src/transit/kv.js';
 import { createOdsayService } from '../src/transit/odsay.js';
 import { createNearKuFinder } from '../src/transit/nearKu.js';
@@ -61,6 +63,16 @@ const odsay = createOdsayService({
 const subway = createSubwayService({ env: { SEOUL_SUBWAY_KEY: SUBWAY_TEST_KEY }, fetchImpl: fakeSubwayFetch({ clock: () => now().getTime() }), clock: () => now().getTime(), log: quiet });
 const nearKu = createNearKuFinder({ provider: live, clock: () => now().getTime() });
 const gyeonggi = createGyeonggiBusService({ env: { GYEONGGI_BUS_API_KEY: GG_TEST_KEY }, fetchImpl: fakeGyeonggiFetch(), clock: () => now().getTime(), log: quiet });
+// v2.5.0 첫 버스가 경기도 정류장인 저장 경로(e2e 사용자 둘에게 미리 넣어 둠 — 실서비스에서는 ODsay 검색 결과에서 고른 경로만 저장):
+//   예시 경로의 첫 버스를 가짜 경기도 API의 수원역(03128) 7770으로, 마지막 버스를 가짜 서울시의 정릉시장(08901) 171로.
+//   시간표는 e2e가 서버 시계에 맞춰 넣음(e2e-gg-live = 출발 30분 안 · e2e-gg-later = 출발 30분 전보다 이름). 예시 데이터
+const ggResponse = JSON.parse(JSON.stringify(SAMPLE_ODSAY_RESPONSE));
+Object.assign(ggResponse.result.path[1].subPath[1], { startName: '수원역', startX: 127.0003, startY: 37.2659, startArsID: '03-128', lane: [{ busNo: '7770', type: 4, busID: 1 }] });
+Object.assign(ggResponse.result.path[1].subPath[5], { startName: '정릉시장', startArsID: '08-901', lane: [{ busNo: '171', type: 11, busID: 1 }] });
+const ggRoute = parseOdsayResult(ggResponse).paths[1];
+for (const id of ['e2e-gg-live', 'e2e-gg-later']) {
+  store8801.update(id, (u) => { u.transit = { mode: 'transit', origin: { name: '수원역', kind: 'stop' }, route: ggRoute, savedAt: now().toISOString(), retry: null }; });
+}
 // v2.2.3 예전에 정밀하게 저장된 GPS 출발지 옮기기(실서비스처럼 켜질 때 한 번 — e2e 저장소는 비어 있어 옮길 것은 없음)
 const coords = createCoordMigration({ store: store8801, odsay, clock: () => now().getTime(), log: quiet });
 coords.start();

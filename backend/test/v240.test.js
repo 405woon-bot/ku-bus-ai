@@ -72,7 +72,7 @@ test('G1 확인 도구: 고정 입력(수원역) → 도착 · 경유 노선 · 
   const arrival = r.steps.find((s) => s.op === 'getBusArrivalListv2');
   assert.deepEqual([arrival.shape.list, arrival.shape.header, arrival.fields.includes('predictTimeSec1'), arrival.sample.predictTimeSec1, arrival.sample.routeName], ['busArrivalList', ['queryTime', 'resultCode', 'resultMessage'], true, 290, '7770']);
   assert.ok(!('plateNo1' in arrival.sample) && !('vehId1' in arrival.sample) && !JSON.stringify(r).includes('경기70아'), '차량 번호 · 차량 ID 값은 싣지 않음(필드 이름만)');
-  assert.deepEqual([r.stage, r.runsToday, r.maxPerDay, r.cached], ['G1', 1, 3, false]);
+  assert.deepEqual([r.stage, r.runsToday, r.maxPerDay, r.cached], ['G2', 1, 3, false], 'v2.5.0부터 G2');
   assert.ok(noKey(r) && noKey(svc.health()));
   assert.deepEqual(svc.health().callsToday, { station: 3, arrival: 1, route: 1 });
 });
@@ -169,7 +169,7 @@ test('API: GET /api/gyeonggi/test · /api/health gyeonggiBus(G1 · 상한 · 캐
     const t = await (await fetch(`${base}/api/gyeonggi/test`)).json();
     assert.deepEqual([t.ok, t.services.arrival.result, t.steps.length], [true, '작동', 5]);
     const h = (await (await fetch(`${base}/api/health`)).json()).gyeonggiBus;
-    assert.deepEqual([h.keyConfigured, h.stage, h.cap, h.cacheSec, h.callsToday, h.test.runsToday, h.test.maxPerDay], [true, 'G1', 900, 30, { station: 3, arrival: 1, route: 1 }, 1, 3]);
+    assert.deepEqual([h.keyConfigured, h.stage, h.cap, h.cacheSec, h.callsToday, h.test.runsToday, h.test.maxPerDay], [true, 'G2', 900, 30, { station: 3, arrival: 1, route: 1 }, 1, 3], 'v2.5.0부터 G2 · 판단 순서 자가 검증은 받은 응답을 다시 써서 호출 수 그대로');
     assert.ok(noKey(t) && noKey(h));
   });
   await run(null, async (base) => {

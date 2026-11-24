@@ -112,6 +112,17 @@ function subwayStatus(mode, h) {
     : ['ok', '준비됨', '환승 경로 모드에서 출발 30분 전부터 첫 지하철 도착을 받아요. 받기 전에는 배차간격으로 예상해요.'];
 }
 
+/** v2.5.0 설정 · 경기도 버스 줄(승인한 미리보기 그대로): 서버 상태(health.gyeonggiBus) — 키는 서버 환경변수 GYEONGGI_BUS_API_KEY. 미리보기 빌드에는 이 줄이 없음 */
+function gyeonggiStatus(h) {
+  if (!h) return ['muted', '확인 중', '서버 상태를 불러오는 중이에요.'];
+  if (!h.keyConfigured) return ['muted', '꺼짐', '서버에 GYEONGGI_BUS_API_KEY가 없어 경기도 정류장의 첫 버스는 배차간격으로 예상해요.'];
+  if (h.quotaToday || h.capReached) return ['warn', '오늘 한도 다 씀', '경기도 버스 하루 한도에 닿아 자정까지 배차간격으로 예상해요.'];
+  if (h.lastError && !h.lastOkAt) return ['danger', '오류', `${h.lastError.message} — 그동안 배차간격으로 예상해요.`];
+  const total = Object.values(h.callsToday || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+  return h.lastOkAt ? ['ok', `연결됨 · 오늘 ${total}회`, `출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요(하루 ${h.cap || 900}회 상한).`]
+    : ['ok', '준비됨', '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요. 받기 전에는 배차간격으로 예상해요.'];
+}
+
 /** 설정 · 서버 저장소 줄: 외부 DB(Upstash)면 서버가 잠들거나 다시 배포돼도 시간표 · 정류장 · 알림 구독이 그대로 */
 function storageStatus(mode, h) {
   if (mode !== 'api') return ['muted', '미리보기 · 서버 없음', '미리보기는 이 기기에만 저장해요.'];
@@ -166,6 +177,7 @@ function ServerGroup({ mode, live: directLive, transitLive = null, health, sync,
   const [aiLevel, aiText, aiDesc] = explainStatus(mode, live, health?.explain);
   const [odLevel, odText, odDesc] = odsayStatus(mode, health?.odsay);
   const [sbLevel, sbText, sbDesc] = subwayStatus(mode, health?.seoulSubway);
+  const [ggLevel, ggText, ggDesc] = gyeonggiStatus(health?.gyeonggiBus);
   return (
     <Group title="데이터 · 서버 연결">
       <Item label="실시간 데이터" desc={srcDesc}>
@@ -186,6 +198,11 @@ function ServerGroup({ mode, live: directLive, transitLive = null, health, sync,
       <Item label="실시간 지하철" desc={sbDesc}>
         <span data-testid="subway-status"><Chip level={sbLevel}>{sbText}</Chip></span>
       </Item>
+      {mode === 'api' && (
+        <Item label="경기도 버스" desc={ggDesc}>
+          <span data-testid="gyeonggi-status"><Chip level={ggLevel}>{ggText}</Chip></span>
+        </Item>
+      )}
       <Item label="서버 동기화" desc="시간표·정류장·설정을 서버에 저장해요. 서버가 이 값으로 알림을 계산해요.">
         <Chip level={syncLevel}>{syncText}</Chip>
       </Item>

@@ -128,14 +128,16 @@ function TransitPending({ onClick }) {
   );
 }
 
-/** 첫 탑승 · 마지막 국민대행 버스가 어디서 온 값인지(실시간 · 출발 30분 전부터 · 못 받음 → 배차로 예상) */
+/** 첫 탑승 · 마지막 국민대행 버스가 어디서 온 값인지(실시간 · 출발 30분 전부터 · 못 받음 → 배차로 예상) — v2.5.0 경기도 정류장 첫 버스 */
 function transitParts(rt) {
   const parts = [], f = rt?.first, l = rt?.final;
   if (f?.kind === 'subway') {
     parts.push(f.source === 'seoul' ? '첫 지하철 실시간' : f.source === 'skip' ? '첫 지하철 실시간은 출발 30분 전부터'
       : f.source === 'nodata' ? '첫 지하철 실시간 없음(배차로 예상)' : '첫 지하철 실시간 못 받음(배차로 예상)');
   } else if (f?.kind === 'bus') {
-    parts.push(f.source === 'seoul' ? (f.buses?.length ? '첫 버스 실시간' : '첫 버스 도착 정보 없음(배차로 예상)') : '첫 버스 실시간 못 받음(배차로 예상)');
+    parts.push(f.source === 'seoul' ? (f.buses?.length ? '첫 버스 실시간' : '첫 버스 도착 정보 없음(배차로 예상)')
+      : f.source === 'gyeonggi' ? (f.buses?.length ? '첫 버스 실시간(경기도)' : '첫 버스 도착 정보 없음(배차로 예상)')
+        : f.source === 'skip' ? '첫 버스 실시간은 출발 30분 전부터' : '첫 버스 실시간 못 받음(배차로 예상)');
   }
   if (l) parts.push(l.source === 'seoul' ? '국민대행 버스 실시간' : '국민대행 버스 실시간 못 받음(배차로 예상)');
   return parts;
@@ -163,7 +165,10 @@ function TransitDataLine({ tl, departedMin = null }) {
   if (!tl || tl.status === 'idle' || tl.status === 'loading') text = '실시간 정보를 불러오는 중 · 그동안 배차간격으로 예상해요';
   else if (tl.status === 'error') { text = '서버에 연결하지 못했어요 · 배차간격으로 예상해 보여 주는 중'; warn = true; }
   else {
-    if (tl.rt?.first?.source === 'seoul' || tl.rt?.final?.source === 'seoul') tag = <SourceTag source="seoul" stale={tl.status === 'stale'} />;
+    // v2.5.0 '경기도 실시간' 배지는 첫 버스를 경기도 도착 정보로 계산할 때만(마지막 국민대행 버스는 지금처럼 서울시)
+    const seoul = tl.rt?.first?.source === 'seoul' || tl.rt?.final?.source === 'seoul';
+    const gg = tl.rt?.first?.source === 'gyeonggi' && tl.rt.first.buses?.length > 0;
+    if (seoul || gg) tag = <>{seoul && <SourceTag source="seoul" stale={tl.status === 'stale'} />}{gg && <SourceTag source="gyeonggi" stale={tl.status === 'stale'} />}</>;
     text = tl.status === 'stale' ? `서버 연결이 끊겨 ${at} 정보를 보여 주는 중 · ${parts.join(' · ')}` : `${parts.join(' · ')}${at ? ` · ${at} 갱신` : ''}`;
     warn = tl.status === 'stale';
   }

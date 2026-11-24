@@ -448,6 +448,8 @@ with sync_playwright() as p:
     pg.wait_for_timeout(300)
     ods = flat(pg.get_by_test_id('odsay-status').inner_text()); sbs = flat(pg.get_by_test_id('subway-status').inner_text())
     check('[환승] 설정 · 데이터 연결: 환승 경로(ODsay) 오늘 3회 다 씀 · 실시간 지하철 연결됨', ods == '오늘 3회 다 씀' and sbs.startswith('연결됨'), f'{ods} / {sbs}')
+    ggs0 = flat(pg.get_by_test_id('gyeonggi-status').inner_text())
+    check("[v2.5.0] 설정 · 데이터 연결: '경기도 버스' 키는 있고 아직 안 부름 → 준비됨", ggs0 == '준비됨' and pg.get_by_text('받기 전에는 배차간격으로 예상해요.').count() == 1, ggs0)
     # 홈: 가까운 정류장 직행 + [경로 다시 찾기]
     pg.evaluate("location.hash = '#home'")
     rn = pg.get_by_test_id('retry-notice'); rn.wait_for(timeout=8000)
@@ -544,6 +546,8 @@ with sync_playwright() as p:
           and '직행' not in ftx and '근처 버스 정류장을 확인하지 못했어요' in ftx and pg.get_by_test_id('nearby-stops').count() == 0 and pg.get_by_test_id('bigstation-tip').count() == 0, ftx[:160])
     ods = flat(pg.get_by_test_id('odsay-status').inner_text()); sbs = flat(pg.get_by_test_id('subway-status').inner_text())
     check('키 없음: 설정 환승 경로 · 실시간 지하철 = 꺼짐', ods == '꺼짐' and sbs == '꺼짐' and pg.get_by_text('SEOUL_SUBWAY_KEY가 없어').count() == 1, f'{ods} / {sbs}')
+    ggs2 = flat(pg.get_by_test_id('gyeonggi-status').inner_text())
+    check("[v2.5.0] 키 없음: 설정 '경기도 버스' = 꺼짐 · GYEONGGI_BUS_API_KEY가 없어 배차간격으로 예상", ggs2 == '꺼짐' and pg.get_by_text('GYEONGGI_BUS_API_KEY가 없어').count() == 1, ggs2)
     h2 = api(ctx, 8802, uid2, 'GET', '/api/health')
     check('키 없음: /api/health odsay · seoulSubway 꺼짐 · 근처 정류장 찾기(nearKu) 있음', h2['odsay']['keyConfigured'] is False and h2['seoulSubway']['keyConfigured'] is False and h2['nearKu']['radiusM'] == 400)
     pg.get_by_role('link', name='홈').first.click(); pg.wait_for_timeout(500)
@@ -710,13 +714,82 @@ with sync_playwright() as p:
           and len(g11['steps']) == 5 and g11['checks']['arrivalSeconds']['withSeconds'] >= 1 and g11['checks']['route']['staOrderMatches'] is True and g11b['cached'] is True
           and '경기70아' not in gdump and 'GG+TEST' not in gdump and 'GG%2BTEST' not in gdump, json.dumps({k: g11.get(k) for k in ('ok', 'services', 'runsToday')}, ensure_ascii=False)[:300])
     check('[v2.4.0] /api/health gyeonggiBus: G1 · 상한 900 · 캐시 30초 · 오늘 호출(정류소 3 · 도착 1 · 노선 1) · 시험 1번(하루 3번) / 키 없는 서버는 꺼짐(no-key, 부르지 않음)',
-          hg['keyConfigured'] is True and hg['stage'] == 'G1' and hg['cap'] == 900 and hg['cacheSec'] == 30 and hg['callsToday'] == {'station': 3, 'arrival': 1, 'route': 1}
+          hg['keyConfigured'] is True and hg['stage'] in ('G1', 'G2') and hg['cap'] == 900 and hg['cacheSec'] == 30 and hg['callsToday'] == {'station': 3, 'arrival': 1, 'route': 1}
           and hg['test']['runsToday'] == 1 and hg['test']['maxPerDay'] == 3 and g12['ok'] is False and g12['reason'] in ('no-service', 'no-key') and hg2['keyConfigured'] is False,
           json.dumps({'hg': hg, 'g12': g12, 'hg2': hg2}, ensure_ascii=False)[:300])
 
     # ⑫ v2.4.1(8801): 서울시 실시간 지하철 한 번에 40줄 · 되돌린 적 없음(rowsFallback 없음) · 확인 도구도 40줄로 물음 · 2호선 첫 지하철 실시간은 위 [환승] 검사에서 그대로 확인
     check('[v2.4.1] 실시간 지하철 40줄: health rows 40 · rowsFallback 없음 · /api/subway/test rowsAsked 40',
           h10['rows'] == 40 and h10['rowsFallback'] is None and t10['rowsAsked'] == 40, json.dumps({'rows': h10.get('rows'), 'rowsFallback': h10.get('rowsFallback'), 'rowsAsked': t10.get('rowsAsked')}))
+
+    # ⑬ v2.5.0 경기도 버스 G2(8801 가짜 경기도 API · e2eServer가 넣어 둔 '첫 버스 = 수원역 03128 · 7770' 저장 경로 · 예시 데이터):
+    #   첫 요청은 지금처럼 서울시(정류장 판단은 뒤에서) → 판단 뒤 출발 30분 안이면 경기도 도착 정보(데이터 줄 · '경기도 실시간' 배지 · 경로 카드 첫 버스 줄 실시간)
+    #   / 출발 30분 전보다 이르면 경기도도 서울시도 부르지 않음('첫 버스 실시간은 출발 30분 전부터' · '예상 · 실시간 전') · 설정 '경기도 버스' 줄 · health는 개수만
+    def gg_open(uid_, mins):
+        c = context(b, p, 8801, uid_, **p.devices['iPhone 13'])
+        s = datetime.datetime.fromisoformat(api(c, 8801, uid_, 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+        st = s.hour * 60 + s.minute + mins   # 이 예시 경로의 표준 계산 출발 = 수업 시작 90분 전
+        api(c, 8801, uid_, 'PUT', '/api/me/timetable', {'classes': [{'id': 'e2eG', 'name': '자료구조', 'day': 0, 'start': hhmm(st), 'end': hhmm(st + 75), 'building': '미래관', 'room': '301'}]})
+        seen = [api(c, 8801, uid_, 'GET', '/api/transit/live')['first']]
+        for _ in range(30):  # 정류장 판단(뒤에서 · 가짜 API라 금방)이 끝날 때까지
+            if seen[-1].get('region') == 'gyeonggi': break
+            time.sleep(0.1); seen.append(api(c, 8801, uid_, 'GET', '/api/transit/live')['first'])
+        return c, s, seen
+    hg0 = api(b.new_context(), 8801, 'x', 'GET', '/api/health')['gyeonggiBus']
+    cg, sg, fg = gg_open('e2e-gg-live', 100)
+    check('[v2.5.0] 첫 요청은 지금처럼 서울시 정류장 조회(판단은 뒤에서) → 판단 뒤 출발 30분 안: 경기도 도착 정보(7770 · 초 단위 · 배차 간격)',
+          fg[0].get('region') != 'gyeonggi' and fg[0]['source'] in ('seoul', 'error') and fg[-1]['source'] == 'gyeonggi' and fg[-1]['region'] == 'gyeonggi'
+          and [x['no'] for x in fg[-1]['buses']] == ['7770'] and 0 < fg[-1]['buses'][0]['etasSec'][0] <= 290 and fg[-1]['buses'][0]['termMin'] == 7, json.dumps([fg[0], fg[-1]], ensure_ascii=False)[:300])
+    pg = cg.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=sg); pg.goto('http://localhost:8801/')
+    pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('첫 버스 실시간(경기도)')", timeout=10000)
+    dl = flat(pg.get_by_test_id('data-line').inner_text())
+    badges = pg.locator('[data-testid="data-line"] [data-source]').evaluate_all("els => els.map(e => e.dataset.source + ':' + e.innerText.trim())")
+    check('[v2.5.0] 홈 데이터 줄: 서울시 실시간 · 경기도 실시간 배지 · 첫 버스 실시간(경기도) · 국민대행 버스 실시간 · 갱신',
+          badges == ['seoul:서울시 실시간', 'gyeonggi:경기도 실시간'] and '첫 버스 실시간(경기도) · 국민대행 버스 실시간 ·' in dl and dl.endswith('갱신'), f'{badges} / {dl}')
+    rc = pg.get_by_test_id('transit-route')
+    tag = flat(rc.locator('div').first.locator('span').last.inner_text())
+    row = flat(rc.locator('li[data-kind="bus"]').first.inner_text())
+    check('[v2.5.0] 내 경로 카드: 실시간 반영 · 첫 버스 줄(수원역 · 7770 · 탑승 · 실시간 · N분 후)', tag == '실시간 반영' and '수원역' in row and '7770' in row and '탑승' in row
+          and re.search(r'실시간 · (곧|\d+분 후)', row) is not None and '배차 간격 예상' not in row, f'{tag} / {row}')
+    ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+    check('[v2.5.0] 휴대폰 화면: 배지 두 개여도 가로 넘침 없음 · 페이지 오류 없음', ov <= 0 and not errs, f'{ov} {str(errs)[:120]}')
+    pg.screenshot(path=str(OUT / 'live_iphone13_gyeonggi_home.png'))
+    pg.get_by_role('link', name='설정').first.click()
+    pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
+    ggs = pg.get_by_test_id('gyeonggi-status')
+    ggt = flat(ggs.inner_text()); ggrow = flat(ggs.locator('xpath=ancestor::*[.//text()[contains(., "경기도 버스")]][1]').inner_text())
+    sub_y = pg.get_by_test_id('subway-status').bounding_box()['y']; gg_y = ggs.bounding_box()['y']
+    check("[v2.5.0] 설정 · 데이터 연결: '경기도 버스' 줄(실시간 지하철 바로 아래) · 연결됨 · 오늘 N회 · 출발 30분 전부터 · 하루 900회 상한",
+          re.fullmatch(r'연결됨 · 오늘 \d+회', ggt) is not None and gg_y > sub_y and '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요(하루 900회 상한).' in ggrow,
+          f'{ggt} / {ggrow[:160]}')
+    pg.get_by_test_id('gyeonggi-status').scroll_into_view_if_needed(); pg.wait_for_timeout(200)
+    pg.screenshot(path=str(OUT / 'live_iphone13_gyeonggi_settings.png'))
+    cg.close()   # 이 화면의 30초 새로고침이 아래 호출 수 비교에 끼지 않게 먼저 닫음
+    hg1 = api(b.new_context(), 8801, 'x', 'GET', '/api/health')['gyeonggiBus']
+    cl, sl, fl = gg_open('e2e-gg-later', 160)
+    hg2b = api(cl, 8801, 'x', 'GET', '/api/health')['gyeonggiBus']
+    check('[v2.5.0] 출발 30분 전보다 이르면: 같은 정류장 판단을 다시 쓰고(바로 skip) 경기도 도착 · 서울시 정류장 모두 부르지 않음',
+          fl[0]['source'] == 'skip' and fl[0]['reason'] == 'not-yet' and fl[0]['region'] == 'gyeonggi' and fl[0]['buses'] == [] and hg2b['callsToday'] == hg1['callsToday'] and hg2b['live']['skipped'] >= 1,
+          json.dumps({'first': fl[0], 'calls': [hg1['callsToday'], hg2b['callsToday']]}, ensure_ascii=False)[:300])
+    pg = cl.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=sl); pg.goto('http://localhost:8801/')
+    pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('갱신')", timeout=10000)
+    dl = flat(pg.get_by_test_id('data-line').inner_text())
+    rc = pg.get_by_test_id('transit-route')
+    tag = flat(rc.locator('div').first.locator('span').last.inner_text()); row = flat(rc.locator('li[data-kind="bus"]').first.inner_text())
+    check("[v2.5.0] 홈(출발 30분 전보다 이름): '첫 버스 실시간은 출발 30분 전부터' · 경기도 배지 없음 · 카드 '예상 · 실시간 전' · 첫 버스 줄 예상(실시간 아님)",
+          '첫 버스 실시간은 출발 30분 전부터 · 국민대행 버스 실시간 ·' in dl and pg.locator('[data-testid="data-line"] [data-source="gyeonggi"]').count() == 0
+          and tag == '예상 · 실시간 전' and re.search(r'\d\d:\d\d 탑승 (배차 간격 )?예상', row) is not None and '실시간' not in row and not errs, f'{dl} / {tag} / {row} / {str(errs)[:80]}')
+    pg.screenshot(path=str(OUT / 'live_iphone13_gyeonggi_later.png'))
+    hg3 = api(cl, 8801, 'x', 'GET', '/api/health')['gyeonggiBus']; cl.close()
+    hdump = json.dumps(hg3, ensure_ascii=False)
+    check('[v2.5.0] /api/health gyeonggiBus: G2 · 정류장 판단 수(usable 1 · 이름 · ID 없이) · 실시간 사용 · 건너뜀 · 한도 아님 · 키 없음',
+          hg3['stage'] == 'G2' and hg0['stops']['known'] == 0 and hg3['stops']['known'] == 1 and hg3['stops']['usable'] == 1 and hg3['live']['used'] >= 1 and hg3['live']['skipped'] >= 1
+          and hg3['capReached'] is False and hg3['quotaToday'] is False and '수원' not in hdump and '202000005' not in hdump and '03128' not in hdump and 'GG+TEST' not in hdump and 'e2e-gg' not in hdump,
+          hdump[:300])
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)

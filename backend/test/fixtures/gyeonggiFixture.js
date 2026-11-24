@@ -42,11 +42,13 @@ export function gbisJson(listKey, items, { envelope = 'wrapped', resultCode = 0,
   return { response: { comMsgHeader: { errMsg: null, returnCode: null, requestMsgID: null, responseMsgID: null, responseTime: null, successYN: null }, msgHeader: head, ...(list ? { msgBody: list } : {}) } };
 }
 
+export const GG_FIXTURE = Object.freeze({ STATIONS, ARRIVALS, VIA, ROUTE_STATIONS, AROUND });
 /**
- * @param {{ key?, envelope?, deny?: string[], nodata?: string[], single?: boolean, respond?: (u: URL, raw: string) => any }} o
+ * @param {{ key?, envelope?, deny?: string[], nodata?: string[], single?: boolean, respond?: (u: URL, raw: string) => any, data?: object }} o
  *   deny: 이 서비스 경로('busarrivalservice' 등)는 SERVICE_ACCESS_DENIED_ERROR / nodata: 이 기능은 결과 없음(4)
+ *   data: v2.5.0 기능별 예시 목록 바꾸기 { getBusStationAroundListv2: [...] | (u) => [...] , … } — 빈 목록이면 결과 없음(4)
  */
-export function fakeGyeonggiFetch({ key = GG_TEST_KEY, envelope = 'wrapped', deny = [], nodata = [], single = false, respond } = {}) {
+export function fakeGyeonggiFetch({ key = GG_TEST_KEY, envelope = 'wrapped', deny = [], nodata = [], single = false, respond, data = {} } = {}) {
   const calls = [];
   const fn = async (url) => {
     const raw = String(url), u = new URL(raw);
@@ -64,7 +66,10 @@ export function fakeGyeonggiFetch({ key = GG_TEST_KEY, envelope = 'wrapped', den
     const need = { getBusStationListv2: 'keyword', getBusArrivalListv2: 'stationId', getBusStationViaRouteListv2: 'stationId', getBusRouteStationListv2: 'routeId', getBusStationAroundListv2: 'x' }[parts[4]];
     if (!u.searchParams.get(need)) return resp(200, JSON.stringify(gbisJson(d[0], [], { envelope, resultCode: 2 })));
     if (nodata.includes(parts[4])) return resp(200, JSON.stringify(gbisJson(d[0], [], { envelope, resultCode: 4 })));
-    return resp(200, JSON.stringify(gbisJson(d[0], d[1], { envelope, single })));
+    const over = Object.prototype.hasOwnProperty.call(data, parts[4]) ? data[parts[4]] : undefined;
+    const items = typeof over === 'function' ? over(u) : over !== undefined ? over : d[1];
+    if (!items || !items.length) return resp(200, JSON.stringify(gbisJson(d[0], [], { envelope, resultCode: 4 })));
+    return resp(200, JSON.stringify(gbisJson(d[0], items, { envelope, single })));
   };
   fn.calls = calls;
   return fn;

@@ -7,6 +7,8 @@
 //     돌발정보 경로 = 마지막 버스(서울시 경유 정류장) + 그 밖의 버스 구간(ODsay 경유 정류장 좌표가 있으면). 지하철 구간은 도로가 아니라 뺌
 //   v2.3.0 첫 지하철이 실시간 허용 목록(19개 노선) 밖이거나 비상 끄기(SEOUL_SUBWAY_OFF_LINES)로 끈 노선이면 서울시를 부르지 않고
 //     처음부터 '실시간 없음'(배차로 예상) — 끝까지 오지 않을 실시간을 '출발 30분 전부터'라고 안내하지 않게. 열차는 노선 묶음별 규칙으로 고름
+//   v2.5.0 첫 버스가 '경기도 정류장'으로 확인되면(gyeonggiBus.js 판단 ①~③) 서울시 대신 경기도 도착 정보 — 출발 30분 전 ~ 20분 뒤에만,
+//     그 전에는 source 'skip'(화면: '첫 버스 실시간은 출발 30분 전부터'). 판단 결과가 없거나 확실하지 않으면 지금처럼 서울시(아래 코드 그대로)
 import { legEnds, planTransit, wantsLive } from '../../../shared/transitPlan.js';
 import { liveSupport, trainsForLeg } from '../../../shared/subwayArrivals.js';
 import { seoulParts } from '../../../shared/time.js';
@@ -27,7 +29,7 @@ const slimWhyTrip = (t) => ({
  *   extras = { incidents, weather, explainer } — 화면 요청(/api/transit/live)에서만. 서버 알림 계산에는 넘기지 않음(AI 호출 아끼기)
  * @returns {Promise<{ fetchedAt, first: object|null, final: object|null, incidents?, weather? }>}  도착 예정(초)은 fetchedAt 기준
  */
-export async function transitLive({ route, provider, subway, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null, departedMin = null }) {
+export async function transitLive({ route, provider, subway, gyeonggi = null, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null, departedMin = null }) {
   const legs = route?.legs || [];
   const { first, last } = legEnds(route);
   const nowMs = nowDate.getTime(), nowMin = seoulParts(nowDate).minutes;
@@ -46,7 +48,18 @@ export async function transitLive({ route, provider, subway, nowDate = new Date(
       }, (e) => { out.final = { i: last, source: 'error', reason: e?.kind || 'api', trips: [] }; }));
     }
   }
-  if (F?.kind === 'bus' && first !== last) {
+  // v2.5.0 첫 버스 정류장 판단(보관한 결과만 — 없으면 뒤에서 판단을 시작하고 이번에는 지금처럼 서울시)
+  const gg = F?.kind === 'bus' && first !== last && gyeonggi?.keyConfigured ? gyeonggi.stopFor(F) : null;
+  if (gg?.status === 'usable') {
+    const std = cls ? planTransit({ route, cls, nowMin, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
+    if (!force && !wantsLive(std, nowMin)) {
+      gyeonggi.noteSkip?.();
+      out.first = { i: first, kind: 'bus', source: 'skip', reason: 'not-yet', region: 'gyeonggi', buses: [] };
+    } else {
+      jobs.push(gyeonggi.arrivalsFor(gg, F).then((r) => { out.first = { i: first, kind: 'bus', ...r }; },
+        () => { out.first = { i: first, kind: 'bus', source: 'error', reason: 'api', region: 'gyeonggi', buses: [] }; }));
+    }
+  } else if (F?.kind === 'bus' && first !== last) {
     if (!F.from?.arsId) out.first = { i: first, kind: 'bus', source: 'unavailable', reason: 'no-ars', buses: [] };
     else {
       jobs.push(provider.stopArrivals(F.from.arsId).then((r) => {

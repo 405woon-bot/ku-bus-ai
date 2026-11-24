@@ -90,14 +90,14 @@ export function SampleTag({ children = '예시 데이터' }) {
   return <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-dashed border-ink-muted px-2 text-xs font-semibold text-ink-muted">{children}</span>;
 }
 /**
- * 데이터 출처 배지: 서울시 실시간(청색 실선) / 예시 데이터(점선) + 예시로 바뀐 이유
- * @param {{ source?: 'seoul'|'mock'|string, reason?: string|null, stale?: boolean }} p
+ * 데이터 출처 배지: 서울시 실시간(청색 실선) / v2.5.0 경기도 실시간(같은 모양) / 예시 데이터(점선) + 예시로 바뀐 이유
+ * @param {{ source?: 'seoul'|'gyeonggi'|'mock'|string, reason?: string|null, stale?: boolean }} p
  */
 export function SourceTag({ source, reason, stale }) {
-  if (source === 'seoul') {
+  if (source === 'seoul' || source === 'gyeonggi') {
     return (
-      <span data-source="seoul" className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-2 text-xs font-bold text-white">
-        <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden="true" />서울시 실시간{stale ? ' · 잠시 전 값' : ''}
+      <span data-source={source} className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-2 text-xs font-bold text-white">
+        <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden="true" />{source === 'gyeonggi' ? '경기도 실시간' : '서울시 실시간'}{stale ? ' · 잠시 전 값' : ''}
       </span>
     );
   }
