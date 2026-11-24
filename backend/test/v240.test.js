@@ -67,7 +67,7 @@ test('G1 확인 도구: 고정 입력(수원역) → 도착 · 경유 노선 · 
     station: ['경기도_정류소 조회', 'ok', '작동'], arrival: ['경기도_버스도착정보 조회', 'ok', '작동'], route: ['경기도_버스노선 조회', 'ok', '작동'] });
   assert.deepEqual(r.picked, { from: 'keyword', stationId: '202000005', stationName: '수원역', mobileNo: '03128', regionName: '수원', x: '127.0003', y: '37.2659' });
   assert.deepEqual(r.checks, {
-    arrivalSeconds: { withSeconds: 2, of: 2 }, around: { count: 3, distanceField: true, maxDistance: 187 },
+    arrivalSeconds: { withSeconds: 2, of: 2 }, around: { status: 'ok', count: 3, distanceField: true, maxDistance: 187 }, // v2.5.1 status
     route: { routeId: '200000085', fromVia: true, stations: 25, hasPickedStation: true, stationSeq: 18, viaStaOrder: 18, staOrderMatches: true, districtCd: { 1: 3, 2: 22 } } });
   const arrival = r.steps.find((s) => s.op === 'getBusArrivalListv2');
   assert.deepEqual([arrival.shape.list, arrival.shape.header, arrival.fields.includes('predictTimeSec1'), arrival.sample.predictTimeSec1, arrival.sample.routeName], ['busArrivalList', ['queryTime', 'resultCode', 'resultMessage'], true, 290, '7770']);

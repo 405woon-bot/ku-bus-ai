@@ -790,6 +790,10 @@ with sync_playwright() as p:
           hg3['stage'] == 'G2' and hg0['stops']['known'] == 0 and hg3['stops']['known'] == 1 and hg3['stops']['usable'] == 1 and hg3['live']['used'] >= 1 and hg3['live']['skipped'] >= 1
           and hg3['capReached'] is False and hg3['quotaToday'] is False and '수원' not in hdump and '202000005' not in hdump and '03128' not in hdump and 'GG+TEST' not in hdump and 'e2e-gg' not in hdump,
           hdump[:300])
+    # v2.5.1 판단 경로 개수 · 확인 도구 path(가짜 경기도 API는 주변 정류소가 응답하므로 지금처럼 주변 정류소로 찾음 — 주변 정류소 실패 → 이름 검색은 백엔드 테스트 v251)
+    check('[v2.5.1] health gyeonggiBus.judgePath: 주변 정류소로 1 · 이름 검색 0 · 주변 실패 0 · lastError 없음 · 확인 도구 selfJudge path around · checks.around.status ok',
+          hg3['judgePath'] == {'around': 1, 'keyword': 0, 'aroundFailed': 0} and hg3['lastError'] is None and g11['selfJudge']['path'] == 'around'
+          and g11['checks']['around']['status'] == 'ok', json.dumps({'judgePath': hg3.get('judgePath'), 'lastError': hg3.get('lastError'), 'self': g11.get('selfJudge')}, ensure_ascii=False)[:300])
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)

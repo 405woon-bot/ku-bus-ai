@@ -5,7 +5,7 @@
 //   · 키 GYEONGGI_BUS_API_KEY(공공데이터포털 일반 인증키 — Decoding 권장, Encoding(% 포함)도 그대로): 서버 전용, 응답 · 로그 · health에 안 나옴
 //   · 서비스별 하루 상한 GYEONGGI_BUS_DAILY_CAP(비우면 900, 최대 1,000 — 개발계정은 서비스마다 하루 1,000건) — 외부 DB 날짜별 카운터
 //   · GYEONGGI_BUS_CACHE_SEC(비우면 30, 10~300): v2.5.0 G2부터 정류장별 도착 정보를 이만큼 보관해 사용자끼리 나눠 씀
-//   · 확인 도구(/api/gyeonggi/test): 한 번에 최대 5건(정류소 3 · 도착 1 · 노선 1) · 결과 10분 보관 · 하루 3번 ·
+//   · 확인 도구(/api/gyeonggi/test): 한 번에 최대 5건(정류소 3 · 도착 1 · 노선 1, v2.5.1: ⑤가 실패하면 판단 확인에 이름 검색 1건 더) · 결과 10분 보관 · 하루 3번 ·
 //     키가 아예 등록되지 않았으면 첫 호출에서 멈춤 · 사용자 경로 · 위치와 무관(입력은 고정 이름 '수원역'과 그 응답에서 고른 값뿐)
 // v2.5.0 G2 — 저장한 경로의 첫 탑승이 버스이고(마지막 국민대행 버스가 아님) 그 정류장이 '경기도 정류장'으로 확인될 때만 경기도 도착 정보를 씀.
 //   판단 순서(하나라도 확실하지 않으면 쓰지 않고 지금처럼 서울시로):
@@ -16,6 +16,11 @@
 //   도착 정보: 출발 30분 전 ~ 20분 뒤에만(transitLive가 판단) · 정류장마다 GYEONGGI_BUS_CACHE_SEC(30초) 동안 사용자끼리 나눠 씀 ·
 //     초 단위 예측(predictTimeSec)을 쓰고 분만 있으면 30초 일찍 온다고 봄 · 회차지 대기(WAIT) · 운행 종료(STOP)는 쓰지 않음 · 받은 뒤 흐른 시간은 뺌
 //   경기도 API에는 첫 버스 정류장의 좌표 · 이름 · 번호와 노선 · 정류장 ID만 보냄(사용자 번호 · 출발지 GPS는 보내지 않음)
+// v2.5.1 주변 정류소(getBusStationAroundListv2)가 시간 초과 · 연결 실패 · 5xx · 형식 다름처럼 '주변 정류소만의 문제'로 실패하면 이름 검색으로 이어서 판단.
+//   키 · 승인 · 한도 문제(auth · denied · quota · rate · cap)면 이름 검색도 같은 '정류소 조회' 서비스라 부르지 않고 바로 실패(호출 아끼기).
+//   이름 검색 목록에서 고를 때는 번호 + 100m에 이름까지 같아야 함(주변 목록 없이는 '같은 번호의 다른 정류장이 근처에 있는지' 확인할 수 없어서 이름으로 메움).
+//   주변 정류소가 실패하고 이름 검색에서도 못 찾으면 '못 찾음(1일)'이 아니라 '실패'로 두고 다시 판단 — 실패가 이어지면 10 → 20 → 40 → 60분 간격.
+//   기다리는 시간(경로 계산 4초 · 확인 도구 5초)과 같은 판단 안에서 주변 정류소를 다시 부르지 않는 것은 그대로
 import { seoulParts } from '../../../shared/time.js';
 import { distanceM } from '../../../shared/transitPlan.js';
 
@@ -31,7 +36,7 @@ export const GG_TEST_MAX_PER_DAY = 3;
 const TEST_TTL_MS = 10 * 60_000;
 const CNT = (svc, d) => `kubusai:gg:calls:${svc}:${d}`;
 const TEST_CNT = (d) => `kubusai:gg:test:${d}`;
-const NOTE = '고정된 공개 입력(정류장 이름 \'수원역\')으로 경기도 버스 API 3종을 시험한 결과예요. 사용자 경로 · 위치와 무관하고 인증키는 나오지 않아요. 같은 결과는 10분 동안 보관하고 하루 3번까지 새로 시험해요. selfJudge는 고른 정류장으로 G2 판단 순서를 다시 해 본 결과예요.';
+const NOTE = '고정된 공개 입력(정류장 이름 \'수원역\')으로 경기도 버스 API 3종을 시험한 결과예요. 사용자 경로 · 위치와 무관하고 인증키는 나오지 않아요. 같은 결과는 10분 동안 보관하고 하루 3번까지 새로 시험해요. selfJudge는 고른 정류장으로 G2 판단 순서를 다시 해 본 결과예요(⑤ 주변 정류소가 실패하면 실제 판단처럼 이름 검색으로 — 이때만 1건 더).';
 
 /* ── 응답 해석(서버 · 테스트가 같은 코드) ── */
 const str = (v) => (v == null ? '' : String(v)).trim();
@@ -146,6 +151,10 @@ const MIN_MS = 60_000, DAY_MS = 86_400_000;
 // 판단 결과 보관 시간: 쓸 수 있음 · 서울 · 인천은 30일(정류장은 잘 안 바뀜), 못 찾음 · 애매함 등은 1일, 실패는 10분(다시 시도)
 export const JUDGE_TTL = Object.freeze({ usable: 30 * DAY_MS, seoul: 30 * DAY_MS, incheon: 30 * DAY_MS, notFound: DAY_MS, ambiguous: DAY_MS, noRegion: DAY_MS, noRoute: DAY_MS, twoWay: DAY_MS, badInput: DAY_MS, failed: 10 * MIN_MS });
 const JUDGE_KINDS = Object.keys(JUDGE_TTL);
+/** v2.5.1 실패가 이어질 때 다시 판단할 때까지: 1번째 10분 → 20분 → 40분 → 그 뒤로 60분(다른 결과가 나오면 처음부터) */
+export const failTtl = (fails) => Math.min(JUDGE_TTL.failed * 2 ** Math.max(0, (Number(fails) || 1) - 1), 60 * MIN_MS);
+// v2.5.1 주변 정류소가 이 이유로 실패하면 이름 검색도 부르지 않음(같은 '정류소 조회' 서비스 — 키 미등록 · 승인 안 됨 · 하루/초당 한도 · 우리 상한)
+const NO_FALLBACK = Object.freeze(['auth', 'denied', 'quota', 'rate', 'cap']);
 /** 정류장 번호 5자리('03-026' · 3026(숫자) → '03026'), 아니면 '' */
 export const digits5 = (v) => {
   if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 100000) return String(v).padStart(5, '0');
@@ -162,9 +171,10 @@ const NEAR_BY_NUMBER_M = 100, NEAR_BY_NAME_M = 30;
 
 /**
  * 후보 정류소 중 하나 고르기 — 번호가 있으면 '번호가 같고 100m 안', 없으면 '이름이 같고 30m 안'. 둘 이상이면 애매함
+ *   requireName(v2.5.1 이름 검색 목록): 번호가 있어도 이름까지 같아야(점으로 나눈 이름 중 하나가 똑같음)
  * @returns {{ station, id, d, by } | { ambiguous: true } | null}
  */
-export function chooseStop(items, { ars, name, lat, lon }) {
+export function chooseStop(items, { ars, name, lat, lon }, { requireName = false } = {}) {
   const cands = [];
   for (const s of Array.isArray(items) ? items : []) {
     const id = str(s?.stationId);
@@ -174,7 +184,9 @@ export function chooseStop(items, { ars, name, lat, lon }) {
     if (d == null || !Number.isFinite(d)) continue;
     cands.push({ s, id, d });
   }
-  const hits = ars ? cands.filter((c) => digits5(c.s.mobileNo) === ars && c.d <= NEAR_BY_NUMBER_M) : cands.filter((c) => c.d <= NEAR_BY_NAME_M && sameStopName(c.s.stationName, name));
+  const hits = ars
+    ? cands.filter((c) => digits5(c.s.mobileNo) === ars && c.d <= NEAR_BY_NUMBER_M && (!requireName || sameStopName(c.s.stationName, name)))
+    : cands.filter((c) => c.d <= NEAR_BY_NAME_M && sameStopName(c.s.stationName, name));
   const ids = [...new Set(hits.map((c) => c.id))];
   if (ids.length > 1) return { ambiguous: true };
   if (!ids.length) return null;
@@ -209,6 +221,7 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
   const liveTimeoutMs = Math.min(timeoutMs, 4000); // 실제 경로 계산에 쓰는 호출은 4초까지만 기다림
   const judged = new Map(), judging = new Map();   // v2.5.0 판단 결과(정류장 기준) · 판단 중
   const judgeStats = Object.fromEntries(JUDGE_KINDS.map((k) => [k, 0]));
+  const judgePath = { around: 0, keyword: 0, aroundFailed: 0 }; // v2.5.1 정류장을 주변 정류소 · 이름 검색 중 어디서 찾았는지 · 주변 정류소를 못 받은 판단 수
   const arrCache = new Map(), arrInflight = new Map(); // 정류장 ID → { at, r }
   const redact = (s) => {
     let t = String(s ?? '');
@@ -243,12 +256,12 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
       if (RANK.includes(out.status)) state.lastOkAt = clock();
       else {
         if (out.status === 'quota') state.quota[svc] = today();
-        state.lastError = { kind: out.status, service: GG_SERVICES[svc].name, message: out.message || out.code || out.status, at: clock() };
+        state.lastError = { kind: out.status, service: GG_SERVICES[svc].name, op, message: out.message || out.code || out.status, at: clock() }; // v2.5.1 op: 어느 기능이 실패했는지
       }
       return out;
     } catch (e) {
       const message = ctrl.signal.aborted ? `경기도 버스 API가 ${wait / 1000}초 안에 답하지 않았어요` : redact(e?.message || e).slice(0, 120);
-      state.lastError = { kind: 'error', service: GG_SERVICES[svc].name, message, at: clock() };
+      state.lastError = { kind: 'error', service: GG_SERVICES[svc].name, op, message, at: clock() };
       log.warn?.(`[gyeonggi] ${op}: ${message}`);
       return { status: 'error', code: null, message, items: [], shape: null, ms: Date.now() - t0 };
     } finally { clearTimeout(timer); }
@@ -267,30 +280,36 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
   async function judge(leg, { pre = {}, wait = liveTimeoutMs } = {}) {
     const inp = legInput(leg);
     if (!inp.ok) return { status: 'badInput' };
-    const fail = (r) => ({ status: 'failed', reason: r.status });
     // ① 주변 정류소(500m) → 없으면 이름 검색
     const around = pre.around || await get('station', 'getBusStationAroundListv2', { x: String(inp.lon), y: String(inp.lat) }, { wait });
-    if (!RANK.includes(around.status)) return fail(around);
-    let pick = chooseStop(around.items, inp);
+    const aroundOk = RANK.includes(around.status);
+    // v2.5.1 키 · 승인 · 한도 문제면 이름 검색도 같은 서비스라 부르지 않고 실패. 그 밖(시간 초과 · 연결 실패 · 5xx · 형식 다름)은 이름 검색으로 이어감
+    if (!aroundOk && NO_FALLBACK.includes(around.status)) return { status: 'failed', reason: around.status, aroundStatus: around.status };
+    const lost = aroundOk ? {} : { aroundStatus: around.status }; // 주변 정류소를 못 봄
+    let pick = aroundOk ? chooseStop(around.items, inp) : null, path = 'around', keyword = null;
     if (!pick) {
       const kw = str(inp.name).split('.')[0].replace(/\(.*?\)/g, '').trim();
       if (kw) {
+        keyword = kw; path = 'keyword';
         const byName = await get('station', 'getBusStationListv2', { keyword: kw }, { wait });
-        if (!RANK.includes(byName.status)) return fail(byName);
-        pick = chooseStop(byName.items, inp);
+        if (!RANK.includes(byName.status)) return { status: 'failed', reason: byName.status, ...lost, keyword };
+        // v2.5.1 이름 검색 목록에서 고를 때는 번호 + 100m에 이름까지 같아야(주변 목록 없이는 같은 번호의 다른 정류장이 근처에 있는지 모름)
+        pick = chooseStop(byName.items, inp, { requireName: true });
       }
     }
-    if (pick?.ambiguous) return { status: 'ambiguous' };
-    if (!pick) return { status: 'notFound' };
+    const kwf = keyword ? { keyword } : {};
+    if (pick?.ambiguous) return { status: 'ambiguous', ...lost, ...kwf };
+    // 못 찾음: 주변 정류소를 봤으면 '못 찾음'(1일), 주변 정류소를 못 봤으면 확실하지 않으니 '실패'(다시 판단)
+    if (!pick) return aroundOk ? { status: 'notFound', ...kwf } : { status: 'failed', reason: keyword ? 'keyword-none' : around.status, ...lost, ...kwf };
     const st = pick.station, region = cut(st.regionName, 20);
-    const base = { stationId: pick.id, stationName: cut(st.stationName), regionName: region, by: pick.by, distM: pick.d };
+    const base = { stationId: pick.id, stationName: cut(st.stationName), regionName: region, by: pick.by, distM: pick.d, path, ...lost, ...kwf };
     // ② 지역
     if (/서울/.test(region)) return { status: 'seoul', ...base };
     if (/인천/.test(region)) return { status: 'incheon', ...base };
     if (!region) return { status: 'noRegion', ...base };
     // ③ 경유 노선 — 경로의 버스 번호가 있고 방향이 하나(같은 번호가 두 노선이거나 같은 노선이 두 번 지나면 안 씀)
     const via = pre.via && pre.viaFor === pick.id ? pre.via : await get('station', 'getBusStationViaRouteListv2', { stationId: pick.id }, { wait });
-    if (!RANK.includes(via.status)) return fail(via);
+    if (!RANK.includes(via.status)) return { status: 'failed', reason: via.status, path, ...lost, ...kwf };
     const routes = [];
     let twice = 0;
     for (const no of inp.buses) {
@@ -307,7 +326,11 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
     let value;
     try { value = await judge(leg); } catch (e) { value = { status: 'failed', reason: 'error' }; log.warn?.(`[gyeonggi] 판단: ${redact(e?.message || e).slice(0, 120)}`); }
     judgeStats[value.status] = (judgeStats[value.status] || 0) + 1;
-    judged.set(key, { at: clock(), ttl: JUDGE_TTL[value.status] ?? DAY_MS, value });
+    if (value.path === 'around' || value.path === 'keyword') judgePath[value.path]++;
+    if (value.aroundStatus) judgePath.aroundFailed++;
+    // v2.5.1 실패가 이어지면 다시 판단할 때까지 10 → 20 → 40 → 60분(다른 결과가 나오면 처음부터)
+    const fails = value.status === 'failed' ? (judged.get(key)?.fails || 0) + 1 : 0;
+    judged.set(key, { at: clock(), ttl: fails ? failTtl(fails) : JUDGE_TTL[value.status] ?? DAY_MS, value, fails });
     if (judged.size > 500) judged.delete(judged.keys().next().value);
     return value;
   }
@@ -418,21 +441,25 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
     const routeItem = s4?.items.find((r) => str(r.stationId) === picked.stationId) || null;
     const checks = s2 ? {
       arrivalSeconds: { withSeconds: s2.items.filter((a) => num(a.predictTimeSec1) != null).length, of: s2.items.length },
-      around: { count: s5.items.length, distanceField: s5.items.some((a) => own(a, 'distance')), maxDistance: s5.items.reduce((m, a) => Math.max(m, num(a.distance) ?? 0), 0) || null },
+      // v2.5.1 status: '주변 정류소 0곳(nodata)'과 '응답 없음(error 등)'을 구분
+      around: { status: s5.status, count: s5.items.length, distanceField: s5.items.some((a) => own(a, 'distance')), maxDistance: s5.items.reduce((m, a) => Math.max(m, num(a.distance) ?? 0), 0) || null },
       route: { routeId, fromVia: Boolean(via), stations: s4.items.length, hasPickedStation: Boolean(routeItem),
         stationSeq: routeItem ? num(routeItem.stationSeq) : null, viaStaOrder: via ? num(via.staOrder) : null,
         staOrderMatches: routeItem && via && num(routeItem.stationSeq) != null && num(via.staOrder) != null ? num(routeItem.stationSeq) === num(via.staOrder) : null,
         districtCd: countBy(s4.items, 'districtCd') },
     } : null;
     // v2.5.0 ⑥ 판단 순서 자가 검증: ①에서 고른 정류장을 '첫 버스 정류장'으로 놓고 G2 판단이 그 정류장 · 그 노선을 다시 찾는지(⑤ · ③ 응답을 그대로 써서 호출 거의 없음)
+    //   v2.5.1 ⑤ 주변 정류소가 실패하면 실제 판단과 똑같이 이름 검색으로 이어감(이때만 1건 더) — path · aroundStatus · keyword로 어느 길로 판단했는지 보여 줌
     let selfJudge = null;
     if (s2 && picked.from === 'keyword' && via) {
       const pseudo = { from: { name: picked.stationName, x: picked.x, y: picked.y, arsId: picked.mobileNo }, buses: [str(via.routeName)], no: str(via.routeName) };
       const j = await judge(pseudo, { pre: { around: s5, via: s3, viaFor: picked.stationId }, wait: timeoutMs });
       const sameStation = j.stationId === picked.stationId, sameRoute = (j.routes || []).some((r) => r.routeId === routeId);
+      const how = j.path === 'keyword' ? ' — 주변 정류소 대신 이름 검색' : '';
       selfJudge = {
-        status: j.status, by: j.by || null, distM: j.distM ?? null, regionName: j.regionName || null, sameStation, sameRoute,
-        result: j.status === 'usable' && sameStation && sameRoute ? '판단 순서 통과(번호 · 거리 · 지역 · 노선)'
+        status: j.status, ...(j.reason ? { reason: j.reason } : {}), path: j.path || null, ...(j.aroundStatus ? { aroundStatus: j.aroundStatus } : {}), ...(j.keyword ? { keyword: cut(j.keyword) } : {}),
+        by: j.by || null, distM: j.distM ?? null, regionName: j.regionName || null, sameStation, sameRoute,
+        result: j.status === 'usable' && sameStation && sameRoute ? `판단 순서 통과(번호 · 거리 · 지역 · 노선${how})`
           : j.status === 'twoWay' ? '확인 필요: 이 노선이 이 정류장을 두 번 지나요(그런 버스는 경기도 정보를 쓰지 않아요)'
             : `확인 필요: ${j.status}${j.reason ? `(${j.reason})` : ''}`,
       };
@@ -471,6 +498,7 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
         lastOkAt: iso(state.lastOkAt), lastError: state.lastError && { ...state.lastError, at: iso(state.lastError.at) },
         // 판단 결과 개수(서버가 켜진 뒤 · 정류장 이름 · ID 없음) · 오늘 첫 버스 도착 정보를 쓴 횟수
         stops: { known: judged.size, ...judgeStats }, live: { ...state.live },
+        judgePath: { ...judgePath }, // v2.5.1 주변 정류소로 찾은 판단 · 이름 검색으로 찾은 판단 · 주변 정류소를 못 받은 판단(개수만)
         test: { runsToday: state.testRuns, maxPerDay: GG_TEST_MAX_PER_DAY, lastAt: iso(testCache?.at) },
       };
     },

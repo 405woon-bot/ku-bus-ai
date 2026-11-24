@@ -58,7 +58,7 @@ test('도우미: 정류장 번호 5자리 · 점으로 나뉜 경기도 이름 �
 test('판단: 번호 + 100m → usable(노선 · staOrder) · 주변에 없으면 이름 검색 · 번호가 없으면 이름 + 30m · 100m 밖이면 못 찾음', async () => {
   const a = service();
   const j = await a.svc.judge(LEG);
-  assert.deepEqual(j, { status: 'usable', stationId: '202000005', stationName: '수원역', regionName: '수원', by: 'number', distM: 0, routes: [{ no: '7770', routeId: '200000085', staOrder: 18 }] });
+  assert.deepEqual(j, { status: 'usable', stationId: '202000005', stationName: '수원역', regionName: '수원', by: 'number', distM: 0, path: 'around', routes: [{ no: '7770', routeId: '200000085', staOrder: 18 }] }); // v2.5.1 path
   assert.deepEqual(a.f.calls.map((c) => c.op), ['getBusStationAroundListv2', 'getBusStationViaRouteListv2']);
   assert.deepEqual([a.f.calls[0].url.searchParams.get('x'), a.f.calls[0].url.searchParams.get('y')], ['127.0003', '37.2659']);
   const b = service({ fetchImpl: fakeGyeonggiFetch({ data: { getBusStationAroundListv2: [] } }) });
@@ -80,10 +80,10 @@ test('판단: 지역 서울 · 인천 · 없음은 경기도로 쓰지 않음 ·
   assert.equal((await service({ fetchImpl: twoIds }).svc.judge(LEG)).status, 'twoWay');
   const two = service({ fetchImpl: fakeGyeonggiFetch({ data: { getBusStationViaRouteListv2: [GG_FIXTURE.VIA[0], { ...GG_FIXTURE.VIA[0], staOrder: 77 }, GG_FIXTURE.VIA[1]] } }) });
   assert.deepEqual((await two.svc.judge(leg({ buses: ['7770', '1007'] }))).routes, [{ no: '1007', routeId: '200000112', staOrder: 7 }], '쓸 수 있는 버스만 남김');
-  assert.deepEqual(await service({ env: { GYEONGGI_BUS_API_KEY: 'WRONG' } }).svc.judge(LEG), { status: 'failed', reason: 'auth' });
+  assert.deepEqual(await service({ env: { GYEONGGI_BUS_API_KEY: 'WRONG' } }).svc.judge(LEG), { status: 'failed', reason: 'auth', aroundStatus: 'auth' }); // v2.5.1 키 문제면 이름 검색 안 함
   const hang = (url, opts) => new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(new Error('aborted'))));
   const slow = createGyeonggiBusService({ env: { GYEONGGI_BUS_API_KEY: GG_TEST_KEY }, fetchImpl: hang, clock: () => at(D - 10), log: quiet, timeoutMs: 40 });
-  assert.deepEqual(await slow.judge(LEG), { status: 'failed', reason: 'error' });
+  assert.deepEqual(await slow.judge(LEG), { status: 'failed', reason: 'error', aroundStatus: 'error', keyword: '수원역' }); // v2.5.1 주변 시간 초과 → 이름 검색도 시간 초과
 });
 
 test('판단 보관: 처음엔 null(뒤에서 판단 · 이번엔 서울시) → usable 30일 · 실패는 10분 뒤 다시 · 키 없으면 판단하지 않음 · health 개수만', async () => {
