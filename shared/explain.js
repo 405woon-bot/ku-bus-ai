@@ -85,11 +85,15 @@ export function causeWords(f) {
 
 // 받침 있으면 '이', 없으면 '가'(끝 글자가 숫자면 읽는 소리 기준: 0영 1일 3삼 6육 7칠 8팔 → 받침 있음)
 const DIGIT_BATCHIM = '1101001110';
-function josa(word) {
+const hasBatchim = (word) => {
   const s = String(word), ch = s[s.length - 1] || '', c = ch.charCodeAt(0);
-  if (/[0-9]/.test(ch)) return DIGIT_BATCHIM[Number(ch)] === '1' ? '이' : '가';
-  return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0 ? '이' : '가';
-}
+  if (/[0-9]/.test(ch)) return DIGIT_BATCHIM[Number(ch)] === '1';
+  return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0;
+};
+/** 주격 조사 '이' · '가' */
+export const josa = (word) => (hasBatchim(word) ? '이' : '가');
+/** v2.2.6 '와' · '과'(예: '공사와 비') — 미리보기 예시 AI 문장에서 씀 */
+export const josaWa = (word) => (hasBatchim(word) ? '과' : '와');
 
 /**
  * 기본 안내 문장(AI를 쓸 수 없을 때 · 예시 데이터일 때). 숫자 없이 사실만.
@@ -131,10 +135,38 @@ function factTerms(f) {
   return [...new Set([...vals, ...words])].filter(Boolean).sort((a, b) => b.length - a.length);
 }
 
+// ── v2.2.6 원인을 결과에 잇는 말(단정하는 인과): 있으면 AI 문장을 버리고 기본 안내로 ──
+//   쓰는 모양: 막히는 곳(사실)을 먼저 말하고, 원인일 수 있는 것은 따로 '…영향일 수 있어요'(예: '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.')
+//   버리는 말: 때문 · 탓 · 인해 · 덕분 · 여파 · '영향으로 · 영향을 받아' · 겹쳐 · ~니까 · ~므로 · '공사로 · 비로'처럼 원인 + 로 ·
+//             '-아서 · -어서 · -해서 · -와서 · -라서 · -있어서 · -면서'처럼 '-서'로 잇는 말('에서' · '께서'는 장소 · 주어라 괜찮음).
+//   '~수 있어요'로 끝나도 잇는 말이 있으면 버림(더 보수적). 사실에 든 이름(도로 · 구간 · 돌발 이름)은 검사에서 빼고, 날씨 · 돌발 종류 낱말은 남김
+const CAUSAL_WORDS = [
+  /때문|탓에|탓이|탓으로|인해|인한|인하여|덕분|여파/,
+  /영향\s*(으로|을\s*받|을\s*주|을\s*줘|을\s*미)/,
+  /겹쳐|겹친|겹치/,
+  /니까|므로/,
+  /(비|눈|소나기|빗방울|진눈깨비|우천|폭우|폭설|빗길|눈길|날씨|공사|작업|사고|추돌|충돌|집회|시위|행사|축제|마라톤|행진|정체)(으)?로(?=[\s,.!?…]|$)/,
+];
+const SEO_LINK = /([가-힣])서(?=[\s,.!?…]|$)/g;
+/** 사실에 든 이름만 뺀 글(날씨 · 돌발 종류 낱말은 남김 — '공사로'처럼 잇는 말을 찾으려고) */
+function namesOut(text, f) {
+  const keep = new Set([f?.날씨, ...(f?.['주변 돌발정보'] || []).map((i) => i?.종류)].filter(Boolean).map(String));
+  let p = String(text ?? '');
+  for (const t of factTerms(f || {})) if (!keep.has(t)) p = p.split(t).join(' ');
+  return p;
+}
+/** v2.2.6 AI 문장에 원인을 결과에 잇는 말이 있는지 */
+export function hasCausalLink(text, f = {}) {
+  const p = namesOut(text, f);
+  if (CAUSAL_WORDS.some((re) => re.test(p))) return true;
+  for (const m of p.matchAll(SEO_LINK)) if (m[1] !== '에' && m[1] !== '께') return true;
+  return false;
+}
+
 /**
- * AI 응답 → 화면에 쓸 한 문장. 첫 줄만 · 따옴표 등 정리 · 한국어 · 짧게 · 숫자 없음 · 사실에 없는 원인 없음
+ * AI 응답 → 화면에 쓸 한 문장. 첫 줄만 · 따옴표 등 정리 · 한국어 · 짧게 · 숫자 없음 · 사실에 없는 원인 없음 · (v2.2.6) 원인을 단정해 잇지 않음
  * 사실에 든 이름(예: '정릉로9길')을 그대로 옮긴 부분은 숫자 · 원인 검사에서 뺍니다.
- * @returns {{ ok: true, text: string } | { ok: false, why: 'empty'|'format'|'long'|'number'|'ungrounded' }}
+ * @returns {{ ok: true, text: string } | { ok: false, why: 'empty'|'format'|'long'|'number'|'ungrounded'|'causal' }}
  */
 export function cleanAiText(raw, f) {
   let s = String(raw ?? '').replace(/[*_`#>"“”'‘’]/g, '').split(/\r?\n/).map((x) => x.trim()).find(Boolean) || '';
@@ -147,5 +179,6 @@ export function cleanAiText(raw, f) {
   if (/[0-9０-９]/.test(probe)) return { ok: false, why: 'number' };
   for (const [re, ok] of CAUSE_CHECKS) if (re.test(probe) && !ok(f)) return { ok: false, why: 'ungrounded' };
   for (const m of probe.match(OTHER) || []) if (!has(f, m)) return { ok: false, why: 'ungrounded' };
+  if (hasCausalLink(s, f)) return { ok: false, why: 'causal' };
   return { ok: true, text: /[.!?。]$/.test(s) ? s : `${s}.` };
 }

@@ -9,8 +9,8 @@ import { kstMidnight, matchIncidents, normalizeAcc } from '@shared/incidents.js'
 import { sampleIncidentRows } from '@shared/samples/incidentSample.js';
 import { summarizeNcst } from '@shared/weather.js';
 import { sampleNcstItems } from '@shared/samples/weatherSample.js';
-import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, ruleText } from '@shared/explain.js';
-import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, legEnds, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
+import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, josa, josaWa, ruleText } from '@shared/explain.js';
+import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, isLateNight, legEnds, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
 import { SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
 import { exampleSubwayJson, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
 
@@ -68,16 +68,17 @@ export function sampleWeather(minutes, kind = 'rain', busSource = 'seoul') {
 /**
  * 미리보기 예시 'AI 문장'(실제 AI 응답 아님): 화면에서 AI 태그 모양을 보여 주려고 사실(facts)로 만든 문장.
  * 실제 서비스에서는 서버가 Gemini에 같은 사실을 넘겨 문장을 받습니다.
+ * v2.2.6 실제 서비스의 규칙과 같게: 막히는 곳(사실)을 먼저 말하고, 원인일 수 있는 것은 따로 '…영향일 수 있어요'(원인을 결과에 잇지 않음)
  */
 export function exampleAiText(f) {
   const place = f['가장 느린 도로'], wx = f.날씨, kinds = causeWords(f).filter((w) => w !== wx);
   const much = f['막힘 정도'] === '혼잡' ? '많이 ' : '';
-  if (!place && !wx && !kinds.length) return NO_CAUSE_TEXT;
-  if (!place) return `${[wx, ...kinds].filter(Boolean).join(' · ')} 영향으로 버스가 느려졌을 수 있어요.`;
-  if (wx && kinds.length) return `${place}에 ${kinds[0]}에다 ${wx}까지 겹쳐 버스가 ${much}막혀요.`;
-  if (wx) return `${place}에 ${wx}까지 와서 버스가 ${much}막혀요.`;
-  if (kinds.length) return `${place}에 ${kinds[0]}까지 겹쳐 버스가 ${much}막혀요.`;
-  return `${place}에서 버스가 ${much}느려요. 특이 원인은 확인되지 않았어요.`;
+  const causes = [...kinds, wx].filter(Boolean); // 돌발 종류 먼저, 날씨 다음(예: '공사와 비')
+  if (!place && !causes.length) return NO_CAUSE_TEXT;
+  const maybe = causes.length === 2 ? `${causes[0]}${josaWa(causes[0])} ${causes[1]} 영향일 수 있어요.` : `${causes.join(' · ')} 영향일 수 있어요.`;
+  if (!place) return `버스가 평소보다 느려요. ${maybe}`;
+  if (!causes.length) return `${place}에서 버스가 ${much}느려요. 특이 원인은 확인되지 않았어요.`;
+  return `${place}${josa(place)} ${much}막혀요. ${maybe}`;
 }
 
 /**
@@ -92,7 +93,7 @@ export function sampleExplain(trips, { incidents, weather, busSource = 'seoul', 
     let explain;
     if (busSource === 'mock') explain = { source: 'example', reason: 'example', text: ruleText(facts) };
     else if (!hasEvidence(facts)) explain = { source: 'rule', reason: 'no-evidence', text: NO_CAUSE_TEXT };
-    else if (variant === 'rule') explain = { source: 'rule', reason: 'quota', text: ruleText(facts) };
+    else if (variant === 'rule') explain = { source: 'rule', reason: 'causal', text: ruleText(facts) }; // v2.2.6 AI가 원인을 단정해 기본 안내로 바꾼 모양
     else explain = { source: 'gemini', model: 'gemini-3.5-flash-lite', text: exampleAiText(facts) };
     return { ...t, delayMin, explain: { ...explain, facts, sample: true } };
   });
@@ -116,7 +117,7 @@ const SAMPLE_NEARBY = [
  * 경로 검색(예시 응답): 홍대입구역 근처면 예시 경로 3개 · 국민대 700m 안이면 안내 · 그 밖은 '경로 없음'.
  * v2.1 scenario(미리보기 '검색 결과'): ok · stale(한도 초과 → 41일 전 예전 경로) · nearby(한도 초과 → 근처 국민대행 정류장) · none(한도 초과 · 근처 없음)
  */
-export function sampleTransitSearch({ lat, lon, name, kind }, { scenario = 'ok', capDemo = false } = {}) {
+export function sampleTransitSearch({ lat, lon, name, kind }, { scenario = 'ok', capDemo = false, nowMin = null } = {}) {
   const sc = capDemo ? 'none' : scenario;
   const calls = (n) => ({ today: n, cap: 25, left: 25 - n }); // 예시 호출 수(실제 서비스: 서버의 오늘 ODsay 호출 수)
   const here = { x: lon, y: lat };
@@ -125,7 +126,8 @@ export function sampleTransitSearch({ lat, lon, name, kind }, { scenario = 'ok',
   const origin = { name: name || SAMPLE_GPS.label, lat, lon, kind };
   if (sc === 'stale') return { ok: true, cached: true, stale: true, staleReason: 'cap', ageDays: 41, message: staleText('cap', 41, 25), searchId: 'sample:hongdae', origin, paths: SAMPLE_PATHS, calls: calls(25), sample: true };
   if (sc === 'nearby') return fb('cap', 25, { nearby: { ok: true, radiusM: TRANSIT.nearKuRadiusM, stops: SAMPLE_NEARBY } });
-  if (sc === 'none') return fb('cap', 25, { nearby: { ok: true, radiusM: TRANSIT.nearKuRadiusM, stops: [] } });
+  // v2.2.6 서버처럼: 심야(서울 23:00 ~ 04:30 전, 미리보기 시각)에 근처 국민대행 정류장을 못 찾으면 night 표시
+  if (sc === 'none') return fb('cap', 25, { nearby: { ok: true, radiusM: TRANSIT.nearKuRadiusM, stops: [], ...(isLateNight(nowMin) ? { night: true } : {}) } });
   if (distanceM(here, { x: SAMPLE_ODSAY_ORIGIN.lon, y: SAMPLE_ODSAY_ORIGIN.lat }) > 1500) return fb('no-path', 1, { message: '미리보기에는 홍대입구역 예시 경로만 있어요(실제 서비스는 ODsay로 찾음)' });
   return { ok: true, cached: false, searchId: 'sample:hongdae', origin, paths: SAMPLE_PATHS, calls: calls(1), sample: true };
 }

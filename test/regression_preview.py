@@ -53,7 +53,7 @@ with sync_playwright() as p:
         fold = lambda: why.get_by_role('button').first.click()
         order = order_now(); txt = flat(why.inner_text())
         check(f'[{label}] 왜 늦나요?(비+공사): 버스 카드 다음 · 노란 줄 · AI + 예시 태그 · +2분 · 근거 · 경로 주변 줄은 안 겹침', why.count() == 1 and why.get_attribute('data-tone') == 'caution'
-              and why.get_attribute('data-why') == 'ai' and order.index(LBL) == order.index('실시간 버스 도착') + 1 and txt.replace(' ', '').startswith('왜늦나요?AI예시') and '정릉로에 공사에다 비까지 겹쳐 버스가 많이 막혀요.' in txt
+              and why.get_attribute('data-why') == 'ai' and order.index(LBL) == order.index('실시간 버스 도착') + 1 and txt.replace(' ', '').startswith('왜늦나요?AI예시') and '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.' in txt
               and '+2분' in txt and '근거' in txt and pg.locator('[data-testid="incident-strip"]').count() == 0, txt)
         fold(); pg.wait_for_timeout(200)
         txt = flat(why.inner_text())
@@ -71,10 +71,16 @@ with sync_playwright() as p:
         check(f'[{label}] AI 보기 · 기본 안내: 기본 안내 태그 + 사실만 쓴 문장', why.get_attribute('data-why') == 'rule' and '기본 안내' in txt
               and '정릉로가 막혀요. 비 · 공사 영향일 수 있어요.' in txt and '+2분' in txt, txt)
         pg.screenshot(path=OUT + f'preview_{label}_why_rule.png')
+        fold(); pg.wait_for_timeout(200)
+        txt = flat(why.inner_text())
+        check(f'[{label}] v2.2.6 기본 안내 펼침: 맨 아래 까닭 — AI 문장이 원인을 단정해 기본 안내로 바꿨어요 · 원인 확정 아님', why.get_attribute('data-reason') == 'causal'
+              and 'AI 문장이 원인을 단정해 기본 안내로 바꿨어요 · 정체의 원인이라고 확정하는 건 아니에요' in txt, txt[-160:])
+        if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_why_rule_open.png', full_page=True)
+        fold(); pg.wait_for_timeout(200)
         pg.get_by_role('button', name='AI 문장', exact=True).click()
         pg.get_by_role('button', name='맑음', exact=True).click(); pg.wait_for_timeout(300)
         txt = flat(why.inner_text())
-        check(f'[{label}] 맑음: 공사만 근거', '정릉로에 공사까지 겹쳐 버스가 많이 막혀요.' in txt and '비까지' not in txt, txt)
+        check(f'[{label}] 맑음: 공사만 근거(v2.2.6 원인을 잇지 않고 따로 · 가능성으로만)', '정릉로가 많이 막혀요. 공사 영향일 수 있어요.' in txt and '비 영향' not in txt and '공사와 비' not in txt, txt)
         pg.get_by_role('button', name='행사만', exact=True).click(); pg.wait_for_timeout(300)
         txt = flat(why.inner_text())
         check(f'[{label}] 맑음 + 행사만(예정): 예정된 행사는 원인으로 쓰지 않음', '정릉로에서 버스가 많이 느려요. 특이 원인은 확인되지 않았어요.' in txt and '행사' not in txt, txt)
@@ -84,7 +90,7 @@ with sync_playwright() as p:
         fold(); pg.wait_for_timeout(200)
         pg.get_by_role('button', name='없음', exact=True).click(); pg.get_by_role('button', name='눈', exact=True).click(); pg.wait_for_timeout(300)
         txt = flat(why.inner_text())
-        check(f'[{label}] 눈 + 돌발 없음: 날씨만 근거', '정릉로에 눈까지 와서 버스가 많이 막혀요.' in txt, txt)
+        check(f'[{label}] 눈 + 돌발 없음: 날씨만 근거(v2.2.6 원인을 잇지 않음)', '정릉로가 많이 막혀요. 눈 영향일 수 있어요.' in txt and '와서' not in txt, txt)
         pg.screenshot(path=OUT + f'preview_{label}_why_snow.png')
         pg.get_by_role('button', name='실시간 실패', exact=True).click(); pg.get_by_role('button', name='공사+행사', exact=True).click()
         pg.get_by_role('button', name='비', exact=True).click(); pg.wait_for_timeout(300)
@@ -364,6 +370,25 @@ with sync_playwright() as p:
               and '내 데이터를 모두 지웠어요' in pg.get_by_test_id('deleted-note').inner_text() and pg.get_by_role('button', name='실시간 연결', exact=True).count() == 1
               and 'kubusai:kcard' not in keys, f'{pg.url} {keys}')
         if label == 'iphone13': pg.screenshot(path=OUT + f'preview_{label}_deleted_home.png')
+        # ── v2.2.6 심야 안내(미리보기 시각 · 위의 모두 삭제 뒤 새로 연 화면에서): 한도 초과 · 근처 국민대행 정류장 없음 → 낮은 지금 문구 그대로, 23:40은 '운행이 끝난 시간이라 … 어려울 수 있어요' ──
+        NIGHT = '버스 운행이 끝난 시간이라 근처 국민대행 정류장을 확인하기 어려울 수 있어요. 아침에 다시 찾아 주세요.'
+        jump(8 * 60 + 5)
+        pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
+        pg.get_by_test_id('preview-fresh').click(); pg.wait_for_timeout(400)
+        onb = pg.get_by_test_id('onboarding')
+        onb.locator('select[aria-label="미리보기 검색 결과"]').select_option('none'); onb.get_by_test_id('transit-gps').click(); pg.wait_for_timeout(400)
+        nn = pg.get_by_test_id('nearby-none'); ntx = flat(nn.inner_text()) if nn.count() else ''
+        check(f'[{label}] v2.2.6 낮(08:05) 근처 정류장 없음: 문구 그대로 · 심야 표시 없음', ntx == '출발지 400m 안에 국민대로 바로 가는 버스 정류장이 없어요' and nn.get_attribute('data-night') == 'false', ntx)
+        jump(23 * 60 + 40)
+        pg.get_by_test_id('onboarding').get_by_test_id('transit-gps').click(); pg.wait_for_timeout(400)
+        nn = pg.get_by_test_id('nearby-none'); ntx = flat(nn.inner_text()) if nn.count() else ''
+        ftx = flat(pg.get_by_test_id('transit-fallback').inner_text()) if pg.get_by_test_id('transit-fallback').count() else ''
+        check(f"[{label}] v2.2.6 심야(23:40) 근처 정류장 없음: '운행이 끝난 시간이라 … 어려울 수 있어요' · '없어요'라고 단정하지 않음 · 큰 환승역 안내는 그대로",
+              ntx == NIGHT and nn.get_attribute('data-night') == 'true' and '정류장이 없어요' not in ftx and pg.get_by_test_id('bigstation-tip').count() == 1, ntx)
+        if label == 'iphone13':
+            pg.get_by_test_id('transit-fallback').scroll_into_view_if_needed(); pg.screenshot(path=OUT + f'preview_{label}_night_nearby.png')
+        ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+        check(f'[{label}] v2.2.6 심야 안내 가로 넘침 없음', ov <= 0, str(ov))
         check(f'[{label}] 페이지 오류 없음', not errs, str(errs)[:200])
         ctx.close()
     b.close()

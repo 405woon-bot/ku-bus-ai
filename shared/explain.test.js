@@ -82,7 +82,7 @@ test('기본 안내 문장: 숫자 없이 · 조사(이/가) 맞춤 · 근거 �
 });
 
 test('AI 문장 검사: 첫 줄 · 따옴표/머리말 정리 · 마침표 보충', () => {
-  assert.deepEqual(cleanAiText('"정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요."', facts()), { ok: true, text: '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' });
+  assert.deepEqual(cleanAiText('"정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요."', facts()), { ok: true, text: '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.' });
   assert.deepEqual(cleanAiText('출력: **정릉로가 막혀요**\n둘째 줄', facts()), { ok: true, text: '정릉로가 막혀요.' });
   assert.deepEqual(cleanAiText('왜 늦나요? 정릉로가 막혀요.', facts()), { ok: true, text: '정릉로가 막혀요.' });
   assert.deepEqual(cleanAiText(NO_CAUSE_TEXT, facts({ '가장 느린 도로': null, 날씨: null, '주변 돌발정보': [] })), { ok: true, text: NO_CAUSE_TEXT });
@@ -105,7 +105,7 @@ test('AI 문장 검사: 숫자 · 사실에 없는 원인 · 너무 김 · 빈 �
 });
 
 test('AI 문장 검사: 사실에 있는 원인 · 이름에 든 숫자(정릉3동 · 정릉로9길)는 통과, 예정된 돌발은 원인으로 못 씀', () => {
-  assert.equal(cleanAiText('정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.', facts()).ok, true);
+  assert.equal(cleanAiText('정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.', facts()).ok, true); // v2.2.6 예전 '…겹쳐 막혀요'는 v226.test.js(원인을 단정)
   assert.equal(cleanAiText('정릉로 하수관 정비공사 영향일 수 있어요.', facts({ 날씨: null })).ok, true);
   const sect = facts({ '가장 느린 도로': '정릉3동주민센터앞~청덕초등학교입구 구간', 날씨: null, '주변 돌발정보': [] });
   assert.equal(cleanAiText('정릉3동주민센터앞~청덕초등학교입구 구간이 많이 막혀요.', sect).ok, true);

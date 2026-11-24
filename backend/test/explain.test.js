@@ -33,7 +33,7 @@ test('요청 모양: 기본 모델 gemini-3.5-flash-lite · v1beta generateConte
   assert.equal(DEFAULT_GEMINI_MODEL, 'gemini-3.5-flash-lite');
   const { svc, fetchImpl } = service();
   const r = await svc.explain(EXAMPLE_FACTS);
-  assert.deepEqual([r.source, r.text, r.model], ['gemini', '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.', 'gemini-3.5-flash-lite']);
+  assert.deepEqual([r.source, r.text, r.model], ['gemini', '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.', 'gemini-3.5-flash-lite']);
   const c = fetchImpl.calls[0];
   assert.equal(c.method, 'POST');
   assert.equal(c.url.href, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent');
@@ -134,13 +134,15 @@ test('그 밖의 실패: 서버 오류 · 네트워크 · 해석 불가는 1분,
   assert.ok(!JSON.stringify(net.svc.health()).includes(KEY), '오류 메시지에 키가 남지 않음');
 });
 
-test('시간 초과: 3.5초(GEMINI_TIMEOUT_MS, 1~4초) 넘으면 끊고 기본 안내 · 화면은 AI를 오래 기다리지 않음(pending → 다음 갱신에 AI 문장)', async () => {
+test('시간 초과: 4초(GEMINI_TIMEOUT_MS, 1~4초 · v2.2.6 기본 3.5초 → 4초) 넘으면 끊고 기본 안내 · 화면은 AI를 오래 기다리지 않음(pending → 다음 갱신에 AI 문장)', async () => {
   const slow = service({ fetchImpl: fakeGeminiFetch({ delayMs: 1500 }), env: { GEMINI_TIMEOUT_MS: '1000' } });
   assert.equal(slow.svc.health().timeoutMs, 1000);
   const t = await slow.svc.explain(EXAMPLE_FACTS, { wait: 1300 });
   assert.deepEqual([t.source, t.reason], ['rule', 'timeout']);
   assert.equal(service({ env: { GEMINI_TIMEOUT_MS: '9000' } }).svc.health().timeoutMs, 4000, '최대 4초');
-  assert.equal(service().svc.health().timeoutMs, 3500, '기본 3.5초');
+  assert.equal(service().svc.health().timeoutMs, 4000, '기본 4초(v2.2.6)');
+  assert.equal(service({ env: { GEMINI_TIMEOUT_MS: '' } }).svc.health().timeoutMs, 4000, '비워 두면 기본 4초(.env.example)');
+  assert.equal(service({ env: { GEMINI_TIMEOUT_MS: '3500' } }).svc.health().timeoutMs, 3500, 'Render에 예전 값이 있으면 그 값(배포 안내)');
   // 화면 응답은 EXPLAIN_WAIT_MS만 기다림 → 기본 안내 + pending, 늦게 온 AI 문장은 캐시 → 다음 요청에 나옴
   const late = service({ fetchImpl: fakeGeminiFetch({ delayMs: 200 }), env: { EXPLAIN_WAIT_MS: '30' } });
   const first = await late.svc.explain(EXAMPLE_FACTS);
@@ -152,7 +154,7 @@ test('시간 초과: 3.5초(GEMINI_TIMEOUT_MS, 1~4초) 넘으면 끊고 기본 �
 
 test('지어내기 막기: 숫자 · 사실에 없는 원인 · 잘린 문장이면 버리고 기본 안내, 같은 사실은 5분 동안 다시 묻지 않음(다른 사실은 물음)', async () => {
   const bad = { [JSON.stringify(EXAMPLE_FACTS)]: '정릉로가 막혀 11분 늦어요.', [JSON.stringify(ROAD_ONLY)]: '정릉로 사고 때문에 막혀요.' };
-  const fetchImpl = fakeGeminiFetch({ reply: (f) => bad[JSON.stringify(f)] ?? '정릉로에 비 영향이 겹쳐 막히는 것 같아요.' });
+  const fetchImpl = fakeGeminiFetch({ reply: (f) => bad[JSON.stringify(f)] ?? '정릉로가 막히고 있어요. 비 영향일 수 있어요.' });
   const { svc, clock } = service({ fetchImpl });
   assert.deepEqual(await svc.explain(EXAMPLE_FACTS), { source: 'rule', reason: 'ungrounded', text: '정릉로가 막혀요. 비 · 공사 영향일 수 있어요.', model: DEFAULT_GEMINI_MODEL });
   assert.equal((await svc.explain(ROAD_ONLY)).text, '정릉로가 막혀요. 특이 원인은 확인되지 않았어요.');
@@ -200,7 +202,7 @@ test('키 보호 · 확인용 test(): 상태 · 결과 어디에도 키가 없�
   assert.match(t.note, /실시간 아님/);
   assert.equal(t.noEvidenceText, NO_CAUSE_TEXT);
   const h = svc.health();
-  assert.deepEqual([h.keyConfigured, h.model, h.callsToday, h.lastText], [true, DEFAULT_GEMINI_MODEL, 1, '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.']);
+  assert.deepEqual([h.keyConfigured, h.model, h.callsToday, h.lastText], [true, DEFAULT_GEMINI_MODEL, 1, '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.']);
   assert.ok(!JSON.stringify([t, h]).includes(KEY));
 });
 
@@ -223,15 +225,15 @@ test('/api/stops/:arsId/trips: 노선마다 delayMin, 막히는 노선에 explai
     const by = Object.fromEntries(j.trips.map((t) => [t.no, t]));
     assert.deepEqual(['171', '1711', '1112'].map((n) => [by[n].congestion, by[n].delayMin, by[n].explain?.source]),
       [['heavy', 11, 'gemini'], ['heavy', 6, 'gemini'], ['normal', 1, 'gemini']]);
-    assert.equal(by['171'].explain.text, '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.');
+    assert.equal(by['171'].explain.text, '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.');
     assert.deepEqual(by['171'].explain.facts['주변 돌발정보'].map((i) => i.종류), ['공사'], '예정된 행사(T-EVENT)는 사실에서 뺌');
     assert.equal(by['1711'].explain.facts['가장 느린 도로'], '정릉3동주민센터앞~청덕초등학교입구 구간');
-    assert.equal(by['1711'].explain.text, '정릉3동주민센터앞~청덕초등학교입구 구간 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.', '이름에 든 숫자는 통과');
+    assert.equal(by['1711'].explain.text, '정릉3동주민센터앞~청덕초등학교입구 구간이 많이 막혀요. 공사와 비 영향일 수 있어요.', '이름에 든 숫자는 통과');
     assert.equal(geminiFetch.calls.length, 3);
     await get('/api/stops/08901/trips');
     assert.equal(geminiFetch.calls.length, 3, '20초 뒤 다시 불러도 5분 캐시');
     const t = await get('/api/explain/test');
-    assert.deepEqual([t.example, t.result.source, t.result.text], [true, 'gemini', '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.']);
+    assert.deepEqual([t.example, t.result.source, t.result.text], [true, 'gemini', '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.']);
     const h = await get('/api/health');
     assert.deepEqual([h.explain.keyConfigured, h.explain.model, h.explain.callsToday], [true, 'gemini-3.5-flash-lite', 4], '노선 3번 + 확인용 1번');
     assert.ok(!JSON.stringify([j, t, h]).includes(KEY));

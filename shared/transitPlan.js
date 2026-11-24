@@ -30,6 +30,24 @@ export const TRANSIT = Object.freeze({
 // v2.2 '출발했어요!' 뒤: 탈 시각이 이만큼(분) 안으로 다가오거나 지나면 그 구간은 '탔음'으로 고정(실시간 목록에서 그 차가 빠지기 전에)
 const PIN_LOCK_MIN = 0.5;
 
+/**
+ * v2.2.6 심야(서울 시각 23:00 ~ 04:30 전): 버스 운행이 대부분 끝나 실시간 도착 정보가 비어 있을 수 있는 시간.
+ * 막차 · 첫차 시각은 노선마다 달라서 정확한 운행 여부는 모름 → 화면은 '~수 있어요'로만 안내(단정하지 않음)
+ */
+export const LATE_NIGHT = Object.freeze({ fromMin: 23 * 60, toMin: 4 * 60 + 30 });
+/** 서울 시각(자정부터 분)이 심야인지 */
+export const isLateNight = (minutes) => Number.isFinite(minutes) && (minutes >= LATE_NIGHT.fromMin || minutes < LATE_NIGHT.toMin);
+export const NIGHT_NEARBY_TEXT = '버스 운행이 끝난 시간이라 근처 국민대행 정류장을 확인하기 어려울 수 있어요. 아침에 다시 찾아 주세요.';
+/**
+ * 근처 국민대행 정류장을 하나도 못 찾았을 때 화면 문구(서버 nearKu 결과 그대로 — 서버와 미리보기가 같은 글).
+ * 심야 표시(night)는 서버가 서울 시각으로 정하고, 정류장을 확인했는데 못 찾았을 때만 붙음(키 · 한도 문제면 붙지 않음)
+ */
+export function nearbyNoneText(nearby) {
+  if (!nearby) return '';
+  if (nearby.night) return NIGHT_NEARBY_TEXT;
+  return nearby.ok ? `출발지 ${nearby.radiusM || TRANSIT.nearKuRadiusM}m 안에 국민대로 바로 가는 버스 정류장이 없어요` : '근처 버스 정류장을 확인하지 못했어요';
+}
+
 const str = (v) => (v == null ? '' : String(v)).trim();
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 

@@ -51,7 +51,7 @@ export function TabBar({ tab, onTab }) {
 const SPEEDS = [1, 10, 60];
 // '도착했어요!' 미리보기용 시각 이동(같은 날 안에서) — 예시 첫 수업은 월 09:00 자료구조(버튼 08:30 ~ 09:15, 수업 ~10:15)
 // 환승 경로(예시: 홍대입구역 출발)는 07:39쯤 출발 → 07:05는 지하철 실시간 전(출발 30분 전부터), 07:30은 실시간 시간대
-export const PREVIEW_TIMES = [[7 * 60 + 5, '07:05 환승 · 실시간 전'], [7 * 60 + 30, '07:30 환승 · 출발 전'], [7 * 60 + 40, '07:40 환승 · 출발 알림'], [8 * 60 + 5, '08:05 출발 전 · 환승 이동 중'], [8 * 60 + 15, '08:15 환승 · 마지막 버스 실시간'], [8 * 60 + 45, '08:45 도착(일찍)'], [8 * 60 + 57, '08:57 도착(빠듯)'], [9 * 60 + 5, '09:05 수업 시작 뒤'], [9 * 60 + 30, '09:30 수업 중']];
+export const PREVIEW_TIMES = [[7 * 60 + 5, '07:05 환승 · 실시간 전'], [7 * 60 + 30, '07:30 환승 · 출발 전'], [7 * 60 + 40, '07:40 환승 · 출발 알림'], [8 * 60 + 5, '08:05 출발 전 · 환승 이동 중'], [8 * 60 + 15, '08:15 환승 · 마지막 버스 실시간'], [8 * 60 + 45, '08:45 도착(일찍)'], [8 * 60 + 57, '08:57 도착(빠듯)'], [9 * 60 + 5, '09:05 수업 시작 뒤'], [9 * 60 + 30, '09:30 수업 중'], [23 * 60 + 40, '23:40 심야 · 근처 정류장 안내']];
 /** 미리보기 전용 띠: 샘플 응답 재생 중임을 밝히고, 시계를 빨리 돌려 알림을 확인할 수 있게 합니다. */
 export function PreviewBar({ preview, dispatch, nowMin = null }) {
   return (
@@ -103,7 +103,7 @@ export function PreviewBar({ preview, dispatch, nowMin = null }) {
               className={`h-7 whitespace-nowrap rounded-md border px-2 text-[12px] font-semibold ${(preview.device || 'pc') === id ? 'border-ink bg-ink text-white' : 'border-line bg-panel text-ink hover:border-ink-muted'}`}>{label}</button>
           ))}
         </span>
-        {/* '왜 늦나요?' 한 줄 모양: AI 태그(예시 문장 · 실제 AI 응답 아님) / 기본 안내(AI 실패 · 한도 초과 때) */}
+        {/* '왜 늦나요?' 한 줄 모양: AI 태그(예시 문장 · 실제 AI 응답 아님) / 기본 안내(AI 실패 · 한도 초과 · v2.2.6 원인을 단정한 문장일 때) */}
         <span className="flex items-center gap-1" role="group" aria-label="미리보기 왜 늦나요">
           <span className="mr-0.5 whitespace-nowrap font-semibold text-ink">AI 보기</span>
           {Object.entries(PREVIEW_EXPLAIN).map(([id, label]) => (

@@ -83,7 +83,7 @@ with sync_playwright() as p:
     order = pg.evaluate('''() => [...document.querySelectorAll('section[aria-label]')].map(s => s.getAttribute('aria-label'))''')
     wt = flat(why.inner_text())
     check('왜 늦나요?: 버스 카드 다음 노란 줄 · AI 문장 · +11분 · 근거(경로 주변 줄 자리, 줄이 늘지 않음)', why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai'
-          and order.index('왜 늦나요?') == order.index('실시간 버스 도착') + 1 and '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' in wt and '+11분' in wt and '근거' in wt
+          and order.index('왜 늦나요?') == order.index('실시간 버스 도착') + 1 and '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.' in wt and '+11분' in wt and '근거' in wt
           and '예시' not in wt and pg.locator('[data-testid="incident-strip"]').count() == 0, wt)
     why.get_by_role('button').first.click()
     wt = flat(why.inner_text())
@@ -388,7 +388,7 @@ with sync_playwright() as p:
           f"{live['incidents'].get('source')} {live['weather'].get('source')} {t171.get('delayMin')} {(t171.get('explain') or {}).get('source')}")
     why = pg.get_by_test_id('why-strip'); wt = flat(why.inner_text()) if why.count() else ''
     check("[환승] v2.1 홈 '왜 늦나요?'(직행과 같은 기준): 마지막 버스 171번 · 노란 줄 · AI 문장 · +11분 · 근거", why.count() == 1 and flat(pg.get_by_test_id('why-who').inner_text()) == '마지막 버스 171번'
-          and why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai' and '정릉로 공사 구간에 비까지 겹쳐 버스가 많이 막혀요.' in wt and '+11분' in wt and '근거' in wt, wt[:160])
+          and why.get_attribute('data-tone') == 'caution' and why.get_attribute('data-why') == 'ai' and '정릉로가 많이 막혀요. 공사와 비 영향일 수 있어요.' in wt and '+11분' in wt and '근거' in wt, wt[:160])
     pg.screenshot(path=str(OUT / 'live_iphone13_transit_why.png'))
     # v2.2 '출발했어요!': 누르면 서버(외부 DB)에 오늘 출발 기록 → 이동 중 카드 · 서버 계산도 누른 시각 기준 · 출발 알림 그만 → 잘못 눌렀어요로 지움
     pg.evaluate('window.scrollTo(0, 0)'); pg.wait_for_timeout(200)
@@ -675,6 +675,13 @@ with sync_playwright() as p:
     pg.screenshot(path=str(OUT / 'live_iphone13_deleted_home.png'))
     check('[v2.2.5] 페이지 오류 없음', not errs, str(errs)[:200])
     ctx.close()
+
+    # ⑨ v2.2.6(8801): 근처 정류장 후보 6곳(화면 3곳) · Gemini 기다림 4초 · 오늘 거른 AI 문장 수(가짜 Gemini는 지시문대로 써서 원인 단정 0)
+    h9 = api(b.new_context(), 8801, 'x', 'GET', '/api/health')
+    check('[v2.2.6] /api/health: nearKu 후보 6곳 · 화면 3곳 · 심야 표시 수 · explain 기다림 4초(화면 1.2초) · 거른 수(원인 단정 없음) · 문장 · 키 없음',
+          h9['nearKu']['maxStops'] == 6 and h9['nearKu']['show'] == 3 and h9['nearKu']['night'] == 0 and h9['explain']['timeoutMs'] == 4000 and h9['explain']['waitMs'] == 1200
+          and isinstance(h9['explain']['rejected'], dict) and h9['explain']['rejected'].get('causal', 0) == 0 and 'E2E-GEMINI-KEY' not in json.dumps(h9),
+          json.dumps({'nearKu': h9['nearKu'], 'explain': {k: h9['explain'][k] for k in ('timeoutMs', 'waitMs', 'rejected')}}, ensure_ascii=False)[:300])
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)

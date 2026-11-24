@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DAYS } from '@shared/time.js';
-import { NEARBY_REASONS, planTransit } from '@shared/transitPlan.js';
+import { NEARBY_REASONS, nearbyNoneText, planTransit } from '@shared/transitPlan.js';
 import { api } from '../lib/api.js';
 import { SAMPLE_GPS, sampleTransitSearch } from '@source';
 import { Button, IconAlert, IconBus, IconCheck, IconLocate, IconRoute, IconStop } from './ui.jsx';
@@ -40,7 +40,7 @@ export default function OriginFinder({ mode, state, dispatch, now, todayClass, n
     setErr(''); setRes(null); setApplied(null); setQuery(o); setBusy('search');
     const r = mode === 'api'
       ? await api.transitSearch(o).catch((e) => ({ ok: false, fallback: 'direct', reason: 'error', message: `경로를 찾지 못했어요(${e.message})` }))
-      : sampleTransitSearch(o, { scenario });
+      : sampleTransitSearch(o, { scenario, nowMin: now.minutes }); // 미리보기: 심야 안내는 미리보기 시각으로
     setRes(r); setBusy('');
   }
   // 홈의 [경로 다시 찾기]: 기억해 둔 출발지로 바로 다시 찾기(한 번만)
@@ -164,7 +164,8 @@ function Fallback({ res, stops, applied, hasRoute, busy, onApply }) {
       <div role="status" data-testid="transit-fallback" data-reason={res.reason} className="grid gap-1.5 rounded-2xl border border-dashed border-[#E0A64A] bg-warn-soft px-4 py-3">
         <p className="flex items-start gap-2 text-[14px] font-semibold leading-snug text-warn"><IconAlert className="mt-0.5 h-4 w-4 shrink-0" />{res.message}</p>
         {res.calls && res.reason === 'cap' && <p className="text-xs text-ink-muted">오늘 새 경로 검색 {res.calls.today}/{res.calls.cap}회 · 찾아 둔 출발지는 한도와 상관없이 바로 나와요</p>}
-        {looked && !stops.length && <p data-testid="nearby-none" className="text-xs text-ink-muted">{res.nearby.ok ? `출발지 ${res.nearby.radiusM || 400}m 안에 국민대로 바로 가는 버스 정류장이 없어요` : '근처 버스 정류장을 확인하지 못했어요'}</p>}
+        {/* v2.2.6 심야(서버가 서울 시각으로 판단)면 '없어요' · '확인하지 못했어요' 대신 운행이 끝났을 수 있다는 안내(단정하지 않음) */}
+        {looked && !stops.length && <p data-testid="nearby-none" data-night={res.nearby.night ? 'true' : 'false'} className="text-xs text-ink-muted">{nearbyNoneText(res.nearby)}</p>}
       </div>
       {stops.length > 0 && (
         <div data-testid="nearby-stops" className="grid gap-2 rounded-2xl border border-primary-line bg-primary-soft px-4 py-3">
