@@ -697,6 +697,22 @@ with sync_playwright() as p:
           h10['lines'] == {'total': 19, 'on': 19, 'off': []} and h10['test']['runsToday'] == 1 and h10['test']['maxPerDay'] == 3
           and set(h10['filtered']) == {'line', 'dir', 'type', 'dest'} and h10['skipped'] == {'line': 0, 'off': 0}
           and '서울' not in json.dumps(h10, ensure_ascii=False) and 'SUBWAY-TEST-KEY' not in json.dumps(h10), json.dumps(h10, ensure_ascii=False)[:300])
+
+    # ⑪ v2.4.0 경기도 버스 G1(8801 가짜 공공데이터포털 · 8802 키 없음): 고정 입력(수원역)으로 정류소 · 도착 · 노선 API 확인 · 10분 보관 · health ·
+    #   차량 번호 값 · 키는 어디에도 안 나옴. 화면(실서비스 빌드)은 그대로
+    c11 = b.new_context()
+    g11 = api(c11, 8801, 'x', 'GET', '/api/gyeonggi/test'); g11b = api(c11, 8801, 'x', 'GET', '/api/gyeonggi/test')
+    hg = api(c11, 8801, 'x', 'GET', '/api/health')['gyeonggiBus']
+    g12 = api(c11, 8802, 'x', 'GET', '/api/gyeonggi/test'); hg2 = api(c11, 8802, 'x', 'GET', '/api/health')['gyeonggiBus']; c11.close()
+    gdump = json.dumps([g11, hg], ensure_ascii=False)
+    check('[v2.4.0] /api/gyeonggi/test: 정류소 · 도착 · 노선 모두 작동 · 수원역(고른 정류장) · 5단계 · 도착 초 단위 · 노선 순서 = 경유 staOrder · 다시 열면 보관한 결과 · 차량 번호 · 키 없음',
+          g11['ok'] is True and [g11['services'][k]['status'] for k in ('station', 'arrival', 'route')] == ['ok', 'ok', 'ok'] and g11['picked']['stationName'] == '수원역'
+          and len(g11['steps']) == 5 and g11['checks']['arrivalSeconds']['withSeconds'] >= 1 and g11['checks']['route']['staOrderMatches'] is True and g11b['cached'] is True
+          and '경기70아' not in gdump and 'GG+TEST' not in gdump and 'GG%2BTEST' not in gdump, json.dumps({k: g11.get(k) for k in ('ok', 'services', 'runsToday')}, ensure_ascii=False)[:300])
+    check('[v2.4.0] /api/health gyeonggiBus: G1 · 상한 900 · 캐시 30초 · 오늘 호출(정류소 3 · 도착 1 · 노선 1) · 시험 1번(하루 3번) / 키 없는 서버는 꺼짐(no-key, 부르지 않음)',
+          hg['keyConfigured'] is True and hg['stage'] == 'G1' and hg['cap'] == 900 and hg['cacheSec'] == 30 and hg['callsToday'] == {'station': 3, 'arrival': 1, 'route': 1}
+          and hg['test']['runsToday'] == 1 and hg['test']['maxPerDay'] == 3 and g12['ok'] is False and g12['reason'] in ('no-service', 'no-key') and hg2['keyConfigured'] is False,
+          json.dumps({'hg': hg, 'g12': g12, 'hg2': hg2}, ensure_ascii=False)[:300])
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)
