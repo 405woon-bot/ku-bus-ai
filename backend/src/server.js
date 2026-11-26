@@ -35,6 +35,11 @@ import { createCoordMigration, userCoordStats } from './coords.js';
 import { createRetention } from './retention.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
+/** v2.6.0 ?next=구간 번호&at=그 역 도착 예상(분, 0시 기준) — 둘 다 맞는 숫자일 때만(아니면 환승 지하철 실시간 없음) */
+const midHintOf = (q) => {
+  const i = Number(q?.next), at = Number(q?.at);
+  return Number.isInteger(i) && i >= 0 && i < 100 && Number.isFinite(at) && at >= 0 && at <= 2880 ? { i, at } : null;
+};
 const ARS_ID = /^\d{5}$/; // 서울시 정류소 번호(arsId)
 const HANDOFF_MS = 2 * 3600_000; // 홈 화면 앱 이어받기 코드 유효 시간(한 번만 쓰임)
 const DEPART_WINDOW_MIN = 240; // v2.2 '출발했어요!'를 받는 시간: 오늘 첫 수업 시작 4시간 전 ~ 시작 전(화면은 추천 출발 1시간 전부터 버튼을 보여 줌)
@@ -354,7 +359,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     try {
       // v2.1 화면 요청에는 경로 주변 돌발정보 · 날씨 · 마지막 국민대행 버스의 '왜 늦나요?'까지(직행과 같은 기준)
       res.json(await transitLive({ route, provider, subway, gyeonggi, nowDate: now(), cls, walkTable: walkTableFor(u), marginMin: u.prefs.marginMin, personalOffsetMin: u.personal?.offsetMin || 0, force: req.query.force === '1', extras: { incidents, weather, explainer },
-        departedMin: departedMinFor(u, p.dateKey, cls) })); // v2.2 '출발했어요!'를 눌렀으면 그 시각 기준
+        departedMin: departedMinFor(u, p.dateKey, cls), // v2.2 '출발했어요!'를 눌렀으면 그 시각 기준
+        midHint: midHintOf(req.query) })); // v2.6.0 화면이 알려 준 '다음 탈 환승 지하철'(?next=구간&at=도착 예상 분)
     } catch (e) { res.status(502).json({ error: `실시간 정보를 가져오지 못했어요: ${e.message}` }); }
   });
 

@@ -9,7 +9,11 @@
 //     처음부터 '실시간 없음'(배차로 예상) — 끝까지 오지 않을 실시간을 '출발 30분 전부터'라고 안내하지 않게. 열차는 노선 묶음별 규칙으로 고름
 //   v2.5.0 첫 버스가 '경기도 정류장'으로 확인되면(gyeonggiBus.js 판단 ①~③) 서울시 대신 경기도 도착 정보 — 출발 30분 전 ~ 20분 뒤에만,
 //     그 전에는 source 'skip'(화면: '첫 버스 실시간은 출발 30분 전부터'). 판단 결과가 없거나 확실하지 않으면 지금처럼 서울시(아래 코드 그대로)
+//   v2.6.0 환승 구간(첫 탑승이 아닌 탈 것 — 지금은 지하철만) — 화면 요청에서 기기가 '다음 탈 환승 구간'을 알려 줄 때만(midHint — 서버 출발 알림 계산에는 없음):
+//     '출발했어요!' 기록 · 실시간 허용 목록 · 예정 탑승 ±15분(기기 기준을 서버 표준값 −15 ~ +30분 안에서만, shared midCheck) · 한 곳 · 하루 몫 → midLive.js
+//     (v2.7.0 중간 환승 버스는 midLive.js의 종류별 받아 오기에 bus를 더함 — 여기는 그대로)
 import { legEnds, planTransit, wantsLive } from '../../../shared/transitPlan.js';
+import { midLive } from './midLive.js';
 import { liveSupport, trainsForLeg } from '../../../shared/subwayArrivals.js';
 import { seoulParts } from '../../../shared/time.js';
 import { delayMinutes } from '../../../shared/explain.js';
@@ -25,11 +29,12 @@ const slimWhyTrip = (t) => ({
 });
 
 /**
- * @param {{ route, provider, subway, nowDate?, cls?, walkTable?, marginMin?, personalOffsetMin?, force?, extras? }} p
+ * @param {{ route, provider, subway, nowDate?, cls?, walkTable?, marginMin?, personalOffsetMin?, force?, extras?, midHint? }} p
+ *   midHint = { i, at } — v2.6.0 화면이 알려 준 '다음 탈 환승 구간'(구간 번호 · 그 역 도착 예상 분). 있을 때만 out.mid(midLive.js)
  *   extras = { incidents, weather, explainer } — 화면 요청(/api/transit/live)에서만. 서버 알림 계산에는 넘기지 않음(AI 호출 아끼기)
  * @returns {Promise<{ fetchedAt, first: object|null, final: object|null, incidents?, weather? }>}  도착 예정(초)은 fetchedAt 기준
  */
-export async function transitLive({ route, provider, subway, gyeonggi = null, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null, departedMin = null }) {
+export async function transitLive({ route, provider, subway, gyeonggi = null, nowDate = new Date(), cls = null, walkTable = {}, marginMin, personalOffsetMin = 0, force = false, extras = null, departedMin = null, midHint = null }) {
   const legs = route?.legs || [];
   const { first, last } = legEnds(route);
   const nowMs = nowDate.getTime(), nowMin = seoulParts(nowDate).minutes;
@@ -92,6 +97,7 @@ export async function transitLive({ route, provider, subway, gyeonggi = null, no
       }, (e) => { out.first = { i: first, kind: 'subway', source: 'error', reason: e?.message || 'api', trains: [] }; }));
     }
   }
+  if (midHint) jobs.push(midLive({ route, midHint, cls, nowMin, nowMs, walkTable, marginMin, personalOffsetMin, departedMin, deps: { subway } }).then((m) => { if (m) out.mid = m; }));
   await Promise.all(jobs);
   if (extras) await addWhy(out, { legs, last, finalFull, nowDate, ...extras });
   return out;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { firstClassOf, recommend } from '@shared/recommend.js';
-import { canDepart, lockPins, planTransit } from '@shared/transitPlan.js';
+import { canDepart, lockPins, midHint, planTransit } from '@shared/transitPlan.js';
 import { WALK_TABLE } from '@shared/campusData.js';
 import { MODE, useAppState } from './hooks/useAppState.js';
 import { useNow } from './hooks/useNow.js';
@@ -115,13 +115,20 @@ export default function App({ handoff = null, deleted = false }) {
   const departure = useDeparture({ mode: MODE, state, dispatch, now, todayClass, route: transitOn ? tr.route : null, ready: MODE !== 'api' || sync.status === 'synced' });
   const departedMin = transitOn ? departure.departedMin : null;
   // 환승 경로의 실시간 재료(첫 지하철 · 버스, 마지막 국민대행 버스) — 서버가 지하철은 출발 30분 전부터만 받아 옴
-  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin, departedMin, preview: MODE === 'sample' ? state.preview : null });
+  // v2.6.0 '출발했어요!' 뒤 다음 탈 환승 지하철(구간 번호 · 그 역 도착 예상) — 계산(rec)이 끝난 뒤 정해 다음 조회부터 서버에 알려 줌
+  const [midReq, setMidReq] = useState(null);
+  const tlive = useTransitLive({ mode: MODE, route: transitOn ? tr.route : null, now, cls: todayClass, walkTable, marginMin, personalOffsetMin, departedMin, preview: MODE === 'sample' ? state.preview : null, midHint: midReq });
   const rec = useMemo(() => {
     if (transitOn) return planTransit({ route: tr.route, cls: todayClass, nowMin: now.minutes, rt: tlive.rt, walkTable, marginMin, personalOffsetMin, departedMin, pins: departure.pins });
     return state.stop ? recommend({ trips: live.trips, cls: todayClass, nowMin: now.minutes, walkTable, walkToStopMin, marginMin, personalOffsetMin }) : null;
   },
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [transitOn, tr.route, tlive.rt, state.stop, live, todayClass, nowKey, walkTable, walkToStopMin, marginMin, personalOffsetMin, departedMin, departure.pins]);
+  useEffect(() => {
+    const h = transitOn && rec?.departed ? midHint(rec, tr.route, now.minutes) : null;
+    setMidReq((p) => (p?.i === h?.i && p?.at === h?.at ? p : h));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rec, transitOn, tr.route]);
   // 누른 뒤: 탈 시각이 된 구간을 '이미 탔음'으로 고정(실시간 목록에서 그 차가 빠져도 도착 예정이 흔들리지 않게)
   useEffect(() => {
     if (!rec?.departed) return;

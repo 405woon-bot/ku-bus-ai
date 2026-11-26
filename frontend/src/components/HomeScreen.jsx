@@ -4,7 +4,7 @@ import { CONGESTION } from '@shared/stopTrips.js';
 import { reasonText } from '@shared/liveStatus.js';
 import { STATUS } from '@shared/recommend.js';
 import { personalLabel } from '@shared/arrival.js';
-import { departProgress, finalTripOf, hhmm, inkOn, subwayGap } from '@shared/transitPlan.js';
+import { departProgress, finalTripOf, hhmm, inkOn, legEnds, subwayGap } from '@shared/transitPlan.js';
 import { routeColor } from '../lib/palette.js';
 import { Button, IconAlert, IconBus, IconChevron, IconIdCard, IconPin, IconRoute, IconStop, IconWalk, SampleTag, SourceTag } from './ui.jsx';
 import { ArriveButton, ArrivalPrompt, ArrivedCard } from './Arrival.jsx';
@@ -128,9 +128,32 @@ function TransitPending({ onClick }) {
   );
 }
 
-/** 첫 탑승 · 마지막 국민대행 버스가 어디서 온 값인지(실시간 · 출발 30분 전부터 · 못 받음 → 배차로 예상) — v2.5.0 경기도 정류장 첫 버스 */
-function transitParts(rt) {
-  const parts = [], f = rt?.first, l = rt?.final;
+/**
+ * v2.6.0 환승 구간 종류별 이름 · 실시간 문구 — 지금은 지하철만.
+ * v2.7.0 중간 환승 버스는 화면 미리보기 승인 뒤 여기에 bus(예: '환승 버스' · 받은 곳에 따라 서울시/경기도)를 더함 — 없는 종류는 말하지 않음
+ */
+const MID_TEXT = {
+  subway: { name: '환승 지하철', live: (m) => `환승 지하철 실시간(${m.line || '지하철'})`, has: (m) => (m.trains?.length || 0) > 0 },
+};
+/** v2.6.0 환승 구간 한 마디('출발했어요!' 뒤 서버가 알려 준 상태) — 출발 전 · 창이 지남 · 끔 · 예시는 말하지 않음 */
+function midPart(m) {
+  const t = MID_TEXT[m?.kind];
+  if (!t) return null;
+  if (m.source === 'seoul') return t.has(m) ? t.live(m) : `${t.name} 도착 정보 없음(배차로 예상)`;
+  if (m.source === 'skip') return m.reason === 'not-yet' ? `${t.name} 실시간은 탑승 15분 전부터` : null;
+  if (m.source === 'nodata') return m.reason === 'line' || m.reason === 'off' ? `${t.name} 실시간 없음(배차로 예상)` : `${t.name} 도착 정보 없음(배차로 예상)`;
+  if (m.source === 'off' || m.source === 'sample') return null;
+  return `${t.name} 실시간 못 받음(배차로 예상)`; // error · cap(오늘 환승 구간 몫 · 전체 상한) · quota
+}
+/** v2.6.0 '출발했어요!' 뒤 첫 탑승 구간을 이미 탔는지(누른 시각으로 계산한 예상) — 탔으면 첫 구간 글 · 배지는 빼고 다음 구간만 */
+export function firstBoarded(rec, route, nowMin) {
+  if (!rec?.departed || !route) return false;
+  const st = departProgress(rec, nowMin)?.byLeg?.[legEnds(route).first];
+  return st === 'done' || st === 'riding';
+}
+/** 첫 탑승 · 환승 지하철(v2.6.0 — '출발했어요!' 뒤에만) · 마지막 국민대행 버스가 어디서 온 값인지(실시간 · 출발 30분 전부터 · 못 받음 → 배차로 예상) — v2.5.0 경기도 정류장 첫 버스 */
+function transitParts(rt, firstDone = false, departed = false) {
+  const parts = [], f = firstDone ? null : rt?.first, l = rt?.final;
   if (f?.kind === 'subway') {
     parts.push(f.source === 'seoul' ? '첫 지하철 실시간' : f.source === 'skip' ? '첫 지하철 실시간은 출발 30분 전부터'
       : f.source === 'nodata' ? '첫 지하철 실시간 없음(배차로 예상)' : '첫 지하철 실시간 못 받음(배차로 예상)');
@@ -139,18 +162,20 @@ function transitParts(rt) {
       : f.source === 'gyeonggi' ? (f.buses?.length ? '첫 버스 실시간(경기도)' : '첫 버스 도착 정보 없음(배차로 예상)')
         : f.source === 'skip' ? '첫 버스 실시간은 출발 30분 전부터' : '첫 버스 실시간 못 받음(배차로 예상)');
   }
+  const mp = departed ? midPart(rt?.mid) : null; // 출발 기록을 지운 직후 다음 갱신 전까지 남은 값은 말하지 않음(계산에도 쓰지 않음)
+  if (mp) parts.push(mp);
   if (l) parts.push(l.source === 'seoul' ? '국민대행 버스 실시간' : '국민대행 버스 실시간 못 받음(배차로 예상)');
   return parts;
 }
-/** 환승 경로 카드 오른쪽 위 태그: 실시간 반영 · 예상(실시간 전) · 예상 · 예시 데이터 */
-export function transitTag(tl, rec) {
+/** 환승 경로 카드 오른쪽 위 태그: 실시간 반영 · 예상(실시간 전) · 예상 · 예시 데이터 — v2.6.0 첫 구간을 이미 탔으면 '실시간 전'은 쓰지 않음 */
+export function transitTag(tl, rec, firstDone = false) {
   if (tl?.sample) return 'sample';
   const used = rec?.state === 'ok' && rec.pick.legs.some((s) => s.kind !== 'walk' && s.src === 'live');
   if (used) return 'live';
-  return tl?.rt?.first?.source === 'skip' ? 'std' : null;
+  return !firstDone && tl?.rt?.first?.source === 'skip' ? 'std' : null;
 }
 /** 환승 경로 모드 카드 아래 데이터 출처 줄(v2.2 '출발했어요!' 뒤에는 앞에 'HH:MM 출발 기준') */
-function TransitDataLine({ tl, departedMin = null }) {
+function TransitDataLine({ tl, departedMin = null, firstDone = false }) {
   const dep = Number.isFinite(departedMin) ? `${hhmm(departedMin)} 출발 기준 · ` : '';
   if (tl?.sample) {
     return (
@@ -159,15 +184,18 @@ function TransitDataLine({ tl, departedMin = null }) {
       </div>
     );
   }
-  const at = tl?.at ? CLOCK.format(new Date(tl.at)) : null, parts = transitParts(tl?.rt);
+  const at = tl?.at ? CLOCK.format(new Date(tl.at)) : null, parts = transitParts(tl?.rt, firstDone, Boolean(dep));
   if (dep) parts.unshift(dep.slice(0, -3));
   let tag = null, text, warn = false;
   if (!tl || tl.status === 'idle' || tl.status === 'loading') text = '실시간 정보를 불러오는 중 · 그동안 배차간격으로 예상해요';
   else if (tl.status === 'error') { text = '서버에 연결하지 못했어요 · 배차간격으로 예상해 보여 주는 중'; warn = true; }
   else {
     // v2.5.0 '경기도 실시간' 배지는 첫 버스를 경기도 도착 정보로 계산할 때만(마지막 국민대행 버스는 지금처럼 서울시)
-    const seoul = tl.rt?.first?.source === 'seoul' || tl.rt?.final?.source === 'seoul';
-    const gg = tl.rt?.first?.source === 'gyeonggi' && tl.rt.first.buses?.length > 0;
+    // v2.6.0 환승 지하철도 서울시 자료 → '서울시 실시간'에 포함 · 출발 뒤 첫 구간을 이미 탔으면 첫 구간 배지는 빼고
+    //   (v2.7.0 중간 환승 버스가 경기도 도착 정보면 mid.source 'gyeonggi' → 아래 gg에 더함)
+    const f = firstDone ? null : tl.rt?.first;
+    const seoul = f?.source === 'seoul' || tl.rt?.final?.source === 'seoul' || (Boolean(dep) && tl.rt?.mid?.source === 'seoul');
+    const gg = f?.source === 'gyeonggi' && f.buses?.length > 0;
     if (seoul || gg) tag = <>{seoul && <SourceTag source="seoul" stale={tl.status === 'stale'} />}{gg && <SourceTag source="gyeonggi" stale={tl.status === 'stale'} />}</>;
     text = tl.status === 'stale' ? `서버 연결이 끊겨 ${at} 정보를 보여 주는 중 · ${parts.join(' · ')}` : `${parts.join(' · ')}${at ? ` · ${at} 갱신` : ''}`;
     warn = tl.status === 'stale';
@@ -391,7 +419,7 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
             : classLine}>
           <span className="num">{hhmm(p.classArriveMin)}</span> 강의실 도착 예정
         </InfoCard>
-        <RouteCard route={transit.route} plan={rec} badge="내 경로" liveTag={transitTag(transit.live, rec)} nowMin={now.minutes} testId="transit-route" sample={Boolean(transit.live?.sample)} progress={progress?.byLeg || null} />
+        <RouteCard route={transit.route} plan={rec} badge="내 경로" liveTag={transitTag(transit.live, rec, firstBoarded(rec, transit.route, now.minutes))} nowMin={now.minutes} testId="transit-route" sample={Boolean(transit.live?.sample)} progress={progress?.byLeg || null} />
       </>
     );
   } else {
@@ -458,7 +486,7 @@ export default function HomeScreen({ mode, syncing, stop, rec, live, now, nextCl
       {!tOn && mock && !arrived && <FallbackNotice reason={live.reason} />}
       {prompt}
       {body}
-      {!arrived && (tOn ? rec?.state === 'ok' && <TransitDataLine tl={transit.live} departedMin={rec.departed ? rec.pick.departMin : null} /> : <DataLine live={live} />)}
+      {!arrived && (tOn ? rec?.state === 'ok' && <TransitDataLine tl={transit.live} departedMin={rec.departed ? rec.pick.departMin : null} firstDone={firstBoarded(rec, transit.route, now.minutes)} /> : <DataLine live={live} />)}
     </div>
   );
 }

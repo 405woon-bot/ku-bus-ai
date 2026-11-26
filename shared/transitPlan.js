@@ -5,11 +5,13 @@
 //     첫 탑승 구간: 실시간(지하철 = 서울시 실시간 도착, 버스 = 서울시 버스 도착) — 승강장까지 2분 여유를 두고 탈 수 있는 첫 열차
 //     마지막 버스(→ 국민대): 서울시 실시간 버스(기존 직행 계산과 같은 차내 시간 · 하차 문 → 강의 건물 도보)
 //     그 밖이나 실시간이 없을 때: ODsay 배차간격의 절반 + 1분을 기다린다고 보고(없으면 지하철 4분 · 버스 6분) ODsay 구간 시간
+//     v2.6.0 환승 지하철(첫 탑승이 아닌 지하철): '출발했어요!' 뒤 기기가 알려 준 '다음 탈 환승 지하철' 한 곳만, 예정 탑승 ±15분에 서울시 실시간(rt.mid)
+//       — 첫 지하철과 같은 규칙(승강장 2분 뒤 첫 열차, 그 뒤는 배차간격으로 이어 붙인 예상)으로 탑승 시각을 정하고 뒤 구간은 그 시각부터 다시 계산
 //   추천 = 수업 시작 '여유(5분)' 전까지 강의실에 닿는 가장 늦은 출발(내 걸음 반영 personalOffsetMin을 도착에 더함)
 import { toMin, toHHMM } from './time.js';
 import { appliedOffset } from './arrival.js';
 import { busTimes, walkToBuilding, DEFAULTS } from './recommend.js';
-import { stationKey } from './subwayArrivals.js';
+import { liveSupport, stationKey } from './subwayArrivals.js';
 
 export const KOOKMIN_GATE = Object.freeze({ x: 126.9972, y: 37.6109, name: '국민대학교 정문' });
 export const TRANSIT = Object.freeze({
@@ -26,6 +28,9 @@ export const TRANSIT = Object.freeze({
   nearKuRadiusM: 400,         // v2.1 경로를 못 찾으면 출발지 이 거리 안의 국민대행 정류장으로 직행 안내
   pathMaxPoints: 60,          // v2.1 버스 구간 경유 정류장 좌표(돌발정보 매칭용) 최대 개수
   departBeforeMin: 60,        // v2.2 [출발했어요!]는 추천 출발 이만큼(분) 전부터 수업 시작 전까지
+  midWindowMin: 15,           // v2.6.0 환승 지하철 실시간: 예정 탑승 시각 −15분 ~ +15분에만
+  midHintEarlyMin: 15,        // v2.6.0 기기가 알려 준 기준 시각은 서버 표준값의 −15분 ~
+  midHintLateMin: 30,         //   +30분 안일 때만 받음(밖이면 서버 표준값)
 });
 // v2.2 '출발했어요!' 뒤: 탈 시각이 이만큼(분) 안으로 다가오거나 지나면 그 구간은 '탔음'으로 고정(실시간 목록에서 그 차가 빠지기 전에)
 const PIN_LOCK_MIN = 0.5;
@@ -226,6 +231,12 @@ function liveTimes(rt, leg, nowMin, untilMin) {
   return null;
 }
 
+/** 실시간 목록에서 역 · 정류장 도착(arrive) 뒤 탈 수 있는 첫 차 — 지하철은 역 입구 → 승강장 2분 뒤(첫 구간 · 환승 구간 같은 규칙) */
+function liveBoard(times, leg, arrive) {
+  const need = arrive + (leg.kind === 'subway' ? TRANSIT.platformMin : 0);
+  return times.find((x) => x.at >= need - 1e-9) || null;
+}
+
 /**
  * 출발 시각 D(분)에 나가면 어떻게 가는지 한 번 따라가 보기.
  * '출발했어요!'(D가 지난 시각)일 때:
@@ -235,10 +246,13 @@ function liveTimes(rt, leg, nowMin, untilMin) {
  * @param {object} [o.pins]  { [구간 번호]: { board, ride, src, vehicle, approx, gate?, byTrip? } }
  * @returns {{ classArriveMin, legs: Array, gate }}
  */
-export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin, pins = null }) {
+export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin, pins = null, midKinds = MID_LIVE_KINDS }) {
   const legs = route.legs, idx = transitIdx(legs), firstI = idx[0], lastI = idx[idx.length - 1];
   const until = untilMin ?? (D + 300);
   const firstTimes = rt?.first && rt.first.i === firstI ? liveTimes(rt.first, legs[firstI], nowMin, until) : null;
+  // v2.6.0 환승 구간 실시간(첫 탑승이 아닌 구간 한 곳 — 켠 종류 midKinds, 지금은 지하철만) — 첫 구간과 같은 방식(liveTimes · liveBoard)
+  const midI = rt?.mid && Number.isInteger(rt.mid.i) && transferLegs(route, midKinds).includes(rt.mid.i) ? rt.mid.i : null;
+  const midTimes = midI != null ? liveTimes(rt.mid, legs[midI], nowMin, until) : null;
   const finalCands = [];
   if (rt?.final && rt.final.i === lastI && legs[lastI].kind === 'bus') {
     for (const trip of rt.final.trips || []) for (const b of busTimes(trip, nowMin, until)) finalCands.push({ ...b, trip });
@@ -273,11 +287,10 @@ export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin
       const c = finalCands.find((x) => x.boardMin >= arrive - 1e-9);
       if (c) { board = c.boardMin; ride = c.trip.inVehicleMin; src = c.live ? 'live' : 'term'; vehicle = c.trip.no; gate = c.trip.gate; finalByTrip = true; byTrip = true; }
     }
-    if (!passed && board == null && i === firstI && firstTimes) {
-      const need = arrive + (leg.kind === 'subway' ? TRANSIT.platformMin : 0);
-      const c = firstTimes.find((x) => x.at >= need - 1e-9);
-      if (c) { board = c.at; src = c.live ? 'live' : 'term'; approx = Boolean(c.approx); if (c.no) vehicle = c.no; }
-    }
+    // 첫 구간 · 환승 구간(v2.6.0): 받은 실시간에서 탈 수 있는 첫 차(지하철은 승강장 2분 뒤)
+    const times = !passed && board == null ? (i === firstI ? firstTimes : i === midI ? midTimes : null) : null;
+    const c = times ? liveBoard(times, leg, arrive) : null;
+    if (c) { board = c.at; src = c.live ? 'live' : 'term'; approx = Boolean(c.approx); if (c.no) vehicle = c.no; }
     if (board == null) { board = arrive + stdWait(leg); src = 'std'; }
     out.push({ i, kind: leg.kind, arrive, board, end: board + ride, wait: board - arrive, ride, src, approx, vehicle, ...(byTrip ? { byTrip: true, gate } : {}) });
     t = board + ride;
@@ -308,9 +321,10 @@ export function firstBoard(route, sim) {
  * @param {number|null} [p.departedMin]  v2.2 '출발했어요!'를 누른 시각(분) — 있으면 '지금 출발'로 다시 계산하지 않고 그 시각에 나갔다고 보고 끝까지
  *   (수업이 시작된 뒤에도 도착 예정 시각까지는 'ok'로 안내)
  * @param {object|null} [p.pins]  v2.2 이미 탔다고 고정한 구간(lockPins) — simulate 참고
+ * @param {string[]} [p.midKinds]  v2.6.0 실시간(rt.mid)을 쓰는 환승 구간 종류 — 기본 MID_LIVE_KINDS(지금은 지하철만)
  * @returns {{ state, mode:'transit', cls, pick?, status?, slackMin?, departNow?, departed?, personalMin?, liveFirst?, liveFinal? }}
  */
-export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0, departedMin = null, pins = null }) {
+export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0, departedMin = null, pins = null, midKinds = MID_LIVE_KINDS }) {
   if (!cls) return { state: 'no-class', mode: 'transit' };
   const start = toMin(cls.start);
   const departed = Number.isFinite(departedMin);
@@ -318,7 +332,9 @@ export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMi
   if (!route?.legs?.length) return { state: nowMin >= start ? 'started' : 'no-trip', mode: 'transit', cls };
   const personal = appliedOffset(personalOffsetMin);
   // 출발한 뒤에는 수업 시작이 지나도 따라가므로 탈 수 있는 차 목록을 지금부터 2시간까지
-  const ctx = { cls, nowMin, rt, walkTable, untilMin: departed ? Math.max(start + 60, nowMin + 120) : start + 60, ...(departed && pins ? { pins } : {}) };
+  // v2.6.0 환승 지하철 실시간(rt.mid)은 '출발했어요!' 뒤에만 씀(출발 취소 직후 다음 갱신 전까지 남은 값은 쓰지 않음)
+  const rtUse = !departed && rt?.mid ? { ...rt, mid: null } : rt;
+  const ctx = { cls, nowMin, rt: rtUse, walkTable, midKinds, untilMin: departed ? Math.max(start + 60, nowMin + 120) : start + 60, ...(departed && pins ? { pins } : {}) };
   const target = start - marginMin;
   const ok = (D) => simulate(route, D, ctx).classArriveMin + personal <= target + 1e-9;
   let D;
@@ -382,6 +398,64 @@ export function departProgress(plan, nowMin) {
   }
   return { byLeg, next, last: legs[legs.length - 1] || null };
 }
+/* ── v2.6.0 환승 구간 실시간('출발했어요!' 뒤 · 탈 때 ±15분 · 한 번에 한 곳) ──
+ * 구간 종류와 상관없는 부분(어느 구간 · 기준 시각 · 창 · 다시 계산)은 여기, 받아 오기 · 하루 몫은 서버의 종류별 받아 오기(backend midLive.js).
+ * 지금은 지하철만 켬. v2.7.0 중간 환승 버스(서울 · 경기)는 MID_LIVE_KINDS에 'bus'를 더하고 서버 받아 오기 · 화면 문구를 붙이면 됨
+ *   (버스는 승강장 시간 없이 정류장 도착 뒤 첫 차 · 기준 시각은 같은 규칙 — 도착 예상 + 표준 기다림(배차 절반 + 1분)) */
+/** 실시간을 붙이는 환승 구간 종류(지금은 지하철만) */
+export const MID_LIVE_KINDS = Object.freeze(['subway']);
+/**
+ * 환승 구간(첫 탑승이 아닌 탈 것) 번호 — 마지막 국민대행 버스는 rt.final이 맡으므로 뺌(마지막 구간이 지하철이면 포함)
+ * @param {string[]} [kinds]  고를 종류(기본 MID_LIVE_KINDS)
+ */
+export function transferLegs(route, kinds = MID_LIVE_KINDS) {
+  const legs = route?.legs || [], idx = transitIdx(legs), last = idx[idx.length - 1];
+  return idx.slice(1).filter((i) => !(i === last && legs[i].kind === 'bus') && kinds.includes(legs[i].kind));
+}
+/** 환승 지하철(첫 탑승이 아닌 지하철 — 마지막 구간이 지하철이어도 포함) */
+export const transferSubways = (route) => transferLegs(route, ['subway']);
+/**
+ * (화면) 서버에 알려 줄 '다음 탈 환승 구간': '출발했어요!' 뒤 다음 탈 구간(departProgress의 next)이 켠 종류의 환승 구간일 때만
+ *   at = 그 역 · 정류장 도착 예상(분) — 이미 탄 구간 고정값 · 첫 구간 실시간이 들어간 이 기기 계산. 그 구간 자신의 실시간과는 무관(창이 스스로 밀리지 않게)
+ * @returns {{ i: number, at: number } | null}  종류는 보내지 않음(서버가 저장한 경로에서 정함)
+ */
+export function midHint(plan, route, nowMin, kinds = MID_LIVE_KINDS) {
+  const nx = departProgress(plan, nowMin)?.next;
+  if (!nx || !Number.isFinite(nx.arrive)) return null;
+  if (!transferLegs(route, kinds).includes(nx.i)) return null;
+  return { i: nx.i, at: Math.round(nx.arrive * 10) / 10 };
+}
+/** 구간 종류별 '실시간을 부를 수 있는 노선인지' — 지하철: 허용 목록 · 비상 끄기. 그 밖의 종류는 서버 받아 오기가 정함 */
+function midSupport(leg, offLines) {
+  return leg?.kind === 'subway' ? liveSupport(leg, offLines) : { ok: true };
+}
+/**
+ * (서버 · 체험판) 환승 구간 실시간을 부를지: 출발 기록 · 기기가 알려 준 구간(켠 종류) · 실시간 허용 목록 · 예정 탑승 ±15분
+ *   기준 T = 기기가 알려 준 도착 예상 + 표준 기다림. 서버 표준값 S(출발 기록 시각 기준 · 실시간 없음)의 −15 ~ +30분 밖이면 S
+ * @param {object} stdPlan planTransit({ … departedMin })(실시간 없음)  @param {{ i, at }|null} hint
+ * @param {{ offLines?: Set|null, kinds?: string[] }} [o]  offLines 지하철 비상 끄기 · kinds 켠 종류(기본 MID_LIVE_KINDS)
+ * @returns {{ ok: boolean, reason?: 'no-hint'|'not-departed'|'not-transfer'|'line'|'off'|'not-yet'|'passed', i?, kind?, T?, S?, clamped?: boolean }}
+ */
+export function midCheck(route, stdPlan, hint, nowMin, { offLines = null, kinds = MID_LIVE_KINDS } = {}) {
+  const i = Number(hint?.i), at = Number(hint?.at);
+  if (!hint || !Number.isInteger(i) || !Number.isFinite(at)) return { ok: false, reason: 'no-hint' };
+  if (stdPlan?.state !== 'ok' || !stdPlan.departed) return { ok: false, reason: 'not-departed', i };
+  const legs = route?.legs || [];
+  const s = transferLegs(route, kinds).includes(i) ? stdPlan.pick.legs.find((l) => l.i === i && l.kind !== 'walk') : null;
+  if (!s) return { ok: false, reason: 'not-transfer', i };
+  const kind = legs[i].kind;
+  const sup = midSupport(legs[i], offLines);
+  if (!sup.ok) return { ok: false, reason: sup.reason, i, kind };
+  const S = s.board;
+  let T = at + stdWait(legs[i]);
+  const clamped = !(T >= S - TRANSIT.midHintEarlyMin && T <= S + TRANSIT.midHintLateMin);
+  if (clamped) T = S;
+  const w = { i, kind, T: Math.round(T * 10) / 10, S: Math.round(S * 10) / 10, clamped };
+  if (nowMin < T - TRANSIT.midWindowMin) return { ok: false, reason: 'not-yet', ...w };
+  if (nowMin > T + TRANSIT.midWindowMin) return { ok: false, reason: 'passed', ...w };
+  return { ok: true, ...w };
+}
+
 /**
  * 누른 뒤 '이미 탔음'으로 고정할 구간: 탈 시각이 30초 안으로 다가왔거나 지난 구간을 그때 값으로(이미 고정한 구간은 그대로).
  * 화면이 이 값을 기기에 두었다가 planTransit({ pins })로 다시 넘김. 바뀐 게 없으면 prev를 그대로 돌려줌

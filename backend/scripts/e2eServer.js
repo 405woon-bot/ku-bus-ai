@@ -3,6 +3,7 @@
 // v2.0: 8801에 가짜 ODsay(하루 상한 3건으로 줄여 '한도 초과'까지) · 가짜 서울시 실시간 지하철. 8802는 키 없음
 // v2.4.0: 8801에 가짜 경기도 버스 API(G1 확인 도구 /api/gyeonggi/test), 8802는 경기도 키 없음
 // v2.5.0: 8801에 첫 버스가 경기도 정류장(가짜 수원역)인 저장 경로를 가진 e2e 사용자 둘(G2 경기도 첫 버스 실시간 · 출발 30분 전부터)
+// v2.6.0: 8801에 07:40 '출발했어요!'를 누른 e2e 사용자 하나(예시 경로 2호선 → 4호선 → 171) — 서버 시계 08:10부터 4호선이 다음 탈 환승 지하철
 // v2.1: 두 서버 모두 '근처 국민대행 정류장 찾기'(nearKu) — 8801은 가짜 서울시 정류소정보(정릉시장 08901), 8802는 키 없음(지어내지 않음)
 // 실행: node scripts/e2eServer.js   (frontend/dist가 먼저 빌드되어 있어야 함)
 import webpush from 'web-push';
@@ -21,7 +22,9 @@ import { fakeGeminiFetch } from '../test/fixtures/geminiFixture.js';
 import { createExplainService } from '../src/transit/geminiExplain.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '../../shared/samples/sampleCourses.js';
 import { SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
-import { parseOdsayResult } from '../../shared/transitPlan.js';
+import { parseOdsayResult, routeKey } from '../../shared/transitPlan.js';
+import { arrivalKey } from '../../shared/arrival.js';
+import { seoulParts } from '../../shared/time.js';
 import { createKv } from '../src/transit/kv.js';
 import { createOdsayService } from '../src/transit/odsay.js';
 import { createNearKuFinder } from '../src/transit/nearKu.js';
@@ -73,6 +76,15 @@ const ggRoute = parseOdsayResult(ggResponse).paths[1];
 for (const id of ['e2e-gg-live', 'e2e-gg-later']) {
   store8801.update(id, (u) => { u.transit = { mode: 'transit', origin: { name: '수원역', kind: 'stop' }, route: ggRoute, savedAt: now().toISOString(), retry: null }; });
 }
+// v2.6.0 환승 지하철: 월 09:00 수업 · 예시 경로(2호선 → 4호선 → 171) · 07:40 출발 기록(실서비스에서는 [출발했어요!]로만 생김 — e2e라 미리 넣어 둠)
+//   표준 계산: 2호선 07:48 탑승 → 08:06 내림 → 4호선(동대문역사문화공원) 08:12 도착 · 08:16 예정 탑승 → 08:01 ~ 08:31에 환승 지하철 실시간
+const midRoute = parseOdsayResult(odsayResponse).paths[0];
+const midClass = { id: 'e2eMid', name: '자료구조', day: 0, start: '09:00', end: '10:15', building: '미래관', room: '301' };
+store8801.update('e2e-mid', (u) => {
+  u.classes = [midClass];
+  u.transit = { mode: 'transit', origin: { name: '홍대입구역', kind: 'stop' }, route: midRoute, savedAt: now().toISOString(), retry: null };
+  u.departure = { key: arrivalKey(seoulParts(now()).dateKey, midClass), at: new Date(now().getTime() - 30 * 60_000).toISOString(), departMin: 7 * 60 + 40, routeKey: routeKey(midRoute) };
+});
 // v2.2.3 예전에 정밀하게 저장된 GPS 출발지 옮기기(실서비스처럼 켜질 때 한 번 — e2e 저장소는 비어 있어 옮길 것은 없음)
 const coords = createCoordMigration({ store: store8801, odsay, clock: () => now().getTime(), log: quiet });
 coords.start();

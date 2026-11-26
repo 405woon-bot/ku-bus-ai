@@ -108,7 +108,12 @@ function subwayStatus(mode, h) {
   if (!h.keyConfigured) return ['muted', '꺼짐', '서버에 SEOUL_SUBWAY_KEY가 없어 지하철은 배차간격으로 예상해요.'];
   if (h.quotaToday || (h.cap && h.callsToday >= h.cap)) return ['warn', '오늘 한도 다 씀', '서울시 실시간 지하철 하루 한도에 닿아 자정까지 배차간격으로 예상해요.'];
   if (h.lastError && !h.lastOkAt) return ['danger', '오류', `${h.lastError.message} — 그동안 배차간격으로 예상해요.`];
-  return h.lastOkAt ? ['ok', `연결됨 · 오늘 ${h.callsToday}회`, '환승 경로의 첫 지하철 도착을 출발 30분 전부터 30초마다 받아요(하루 900회 상한).']
+  // v2.6.0 환승 지하철 몫(h.mid.cap, 0이면 끔): 켜져 있으면 설명에 함께 · 오늘 몫을 다 쓴 날은 그 안내(상태 칩은 그대로)
+  const midCap = h.mid?.cap || 0;
+  if (h.lastOkAt && midCap && h.mid?.capReached) return ['ok', `연결됨 · 오늘 ${h.callsToday}회`, `오늘 환승 지하철 몫(${midCap}회)을 다 써 자정까지 환승 지하철은 배차간격으로 예상해요. 첫 지하철은 그대로 받아요.`];
+  return h.lastOkAt ? ['ok', `연결됨 · 오늘 ${h.callsToday}회`, midCap
+    ? `환승 경로의 첫 지하철은 출발 30분 전부터, 환승 지하철은 출발했어요! 뒤 탈 때 15분 전부터 받아요(하루 ${h.cap || 900}회 상한 · 환승 지하철은 그중 ${midCap}회까지).`
+    : '환승 경로의 첫 지하철 도착을 출발 30분 전부터 30초마다 받아요(하루 900회 상한).']
     : ['ok', '준비됨', '환승 경로 모드에서 출발 30분 전부터 첫 지하철 도착을 받아요. 받기 전에는 배차간격으로 예상해요.'];
 }
 

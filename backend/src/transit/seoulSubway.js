@@ -9,14 +9,21 @@
 //   · v2.4.1 한 번에 40줄(…/0/40/역명, 호출 수는 그대로 1건) — 큰 환승역(서울역 등)에서 20줄에 잘리던 노선까지. 서울시가 40줄 요청을 받지 않으면
 //     (처음 보는 오류 코드 · HTTP 4xx) 그날은 자동으로 20줄로 되돌리고 한 번 더(health rows · rowsFallback). 확인 도구는 노선별로 남은 시간을 어떻게 구했는지(eta) 개수도
 //   · v2.5.2 방면 형식은 실제 계산과 같은 규칙(shared DIR_RE — 마지막 '-' 뒤)으로 셈 · 노선별 '종착이 역 이름이 아닌 줄'(oddDest, 예: '-2') 개수와 예 한 줄
+//   · v2.6.0 환승 지하철(첫 탑승이 아닌 지하철) 실시간: 하루 몫 SEOUL_SUBWAY_MID_DAILY_CAP(비우면 300, 0이면 끔 — 전체 900건 안에서, 외부 DB 날짜별 카운터 —
+//     midBudget.js, v2.7.0 중간 환승 버스도 같은 것을 씀) · 같은 역은 1분 안에 받은 값을 다시 씀(사용자끼리 나눔) ·
+//     부를지는 midLive.js가 정함(출발했어요! 뒤 · 기기가 알려 준 한 곳 · 예정 탑승 ±15분)
 import { DIR_RE, LIVE_LINES, liveLine, oddDest, parseOffLines, parseSubwayArrivals, rowEta, stationKey, subwayStatus } from '../../../shared/subwayArrivals.js';
 import { seoulParts } from '../../../shared/time.js';
+import { MID_DEFAULT_CAP, MID_REUSE_SEC, createMidBudget, parseMidCap } from './midBudget.js';
 
 const BASE = 'http://swopenapi.seoul.go.kr/api/subway';
 const ROWS = 40;      // v2.4.1 한 번에 받는 줄 수(…/0/40/역명) — 예전 20
 const ROWS_SAFE = 20; // 서울시가 40줄 요청을 받지 않으면 그날은 이 값으로
 const CNT = (d) => `kubusai:subway:calls:${d}`;
 const TEST_CNT = (d) => `kubusai:subway:test:${d}`;
+const MID_CNT = (d) => `kubusai:subway:mid:${d}`; // v2.6.0 환승 지하철 몫
+const MID_REUSE_MS = MID_REUSE_SEC * 1000; // v2.6.0 환승 지하철은 같은 역을 1분 안에 받은 값으로(첫 지하철은 30초)
+export { MID_DEFAULT_CAP, parseMidCap }; // v2.6.0 환승 지하철 하루 몫: 비우면 300, '0' · 숫자가 아닌 값이면 끔(0), 최대 1,000
 
 /* ── v2.3.0 확인 도구 ── */
 // 고정된 공개 역(사용자 경로와 무관) — 시험할 노선이 지나는 서울 안 역. 경강선(1081)은 서울 안 역이 없어 시험하지 못함
@@ -85,6 +92,7 @@ export function createSubwayService({ env = process.env, kv = null, fetchImpl = 
   const ttlMs = Math.max(10, Number(env.SEOUL_SUBWAY_CACHE_SEC) || 30) * 1000;
   const { off: offLines, ignored: offIgnored } = parseOffLines(env.SEOUL_SUBWAY_OFF_LINES);
   const today = () => seoulParts(new Date(clock())).dateKey;
+  const midBudget = createMidBudget({ cap: parseMidCap(env.SEOUL_SUBWAY_MID_DAILY_CAP), kv, keyOf: MID_CNT, today }); // v2.6.0 환승 지하철 몫
   const state = { date: today(), calls: 0, lastOkAt: null, lastError: null, quotaDate: null, testRuns: 0, filtered: zero(), skipped: { line: 0, off: 0 }, rowsFallback: null };
   const cache = new Map(), inflight = new Map();
   let testCache = null, testInflight = null;
@@ -163,15 +171,20 @@ export function createSubwayService({ env = process.env, kv = null, fetchImpl = 
 
   /**
    * 역 하나의 실시간 도착(열차마다 남은 초 · 방면 · 종착). fetchedAt 기준이라 쓰는 쪽에서 흐른 시간을 빼야 함
+   *   v2.6.0 { mid: true }(환승 지하철): 1분 안에 받은 값이면 다시 씀 · 새로 부를 때만 환승 지하철 몫을 씀(넘으면 부르지 않고 source 'cap' · reason 'mid-cap')
    * @returns {Promise<{ source:'seoul'|'off'|'cap'|'quota'|'nodata'|'error', rows, fetchedAt, station?, reason?, message? }>}
    */
-  async function arrivals(stationName) {
+  async function arrivals(stationName, { mid = false } = {}) {
     const name = String(stationName || '').trim();
     if (!key) return { source: 'off', reason: 'no-key', rows: [], fetchedAt: iso(clock()) };
     if (!name) return { source: 'error', reason: 'no-station', rows: [], fetchedAt: iso(clock()) };
     const c = cache.get(name);
-    if (c && clock() - c.at < c.ttl) return c.value;
+    if (c && clock() - c.at < (mid ? Math.max(c.ttl, MID_REUSE_MS) : c.ttl)) return c.value;
     if (inflight.has(name)) return inflight.get(name);
+    if (mid) {
+      if (midBudget.over()) return { source: 'cap', reason: 'mid-cap', rows: [], fetchedAt: iso(clock()) }; // 보관하지 않음(첫 지하철은 그대로)
+      midBudget.take();
+    }
     const p = load(name).then((v) => {
       const value = { ...v, fetchedAt: iso(clock()) };
       // 정상은 30초, 이름이 안 맞는 역은 10분(다시 물어도 같음), 오류는 30초 동안 다시 묻지 않음
@@ -256,6 +269,8 @@ export function createSubwayService({ env = process.env, kv = null, fetchImpl = 
     test,
     countFiltered,
     countSkip,
+    noteMid: midBudget.note, // v2.6.0 환승 지하철 개수(midLive.js가 부름) — 개수만(역 · 노선 이름 없음)
+    midCap: midBudget.cap, // v2.6.0 0이면 환승 지하철 실시간 끔
     health() {
       roll();
       return {
@@ -265,6 +280,8 @@ export function createSubwayService({ env = process.env, kv = null, fetchImpl = 
         rowsFallback: state.rowsFallback?.date === today() ? { reason: state.rowsFallback.reason, at: iso(state.rowsFallback.at) } : null,
         lines: linesInfo(), filtered: { ...state.filtered }, skipped: { ...state.skipped },
         test: { runsToday: state.testRuns, maxPerDay: TEST_MAX_PER_DAY, lastAt: iso(testCache?.at) },
+        // v2.6.0 환승 지하철: 하루 몫 · 오늘 부른 수 · 다 씀 · 다시 쓰는 시간 · 받은/열차 없음/못 받음 · 부르지 않은 이유별 · 기기 기준 시각을 서버 값으로 바꾼 수(개수만)
+        mid: midBudget.health(),
       };
     },
   };

@@ -790,6 +790,52 @@ with sync_playwright() as p:
           hg3['stage'] == 'G2' and hg0['stops']['known'] == 0 and hg3['stops']['known'] == 1 and hg3['stops']['usable'] == 1 and hg3['live']['used'] >= 1 and hg3['live']['skipped'] >= 1
           and hg3['capReached'] is False and hg3['quotaToday'] is False and '수원' not in hdump and '202000005' not in hdump and '03128' not in hdump and 'GG+TEST' not in hdump and 'e2e-gg' not in hdump,
           hdump[:300])
+    # ⑭ v2.6.0 환승 지하철(8801 · e2eServer가 넣어 둔 07:40 출발 기록 · 예시 경로 2호선 → 4호선 → 171 · 가짜 서울시 지하철, 예시 열차):
+    #   알려 주지 않으면 부르지 않음 → 화면이 다음 탈 환승 지하철(4호선)을 알려 주면 그 한 곳만 · 출처 줄 '환승 지하철 실시간(4호선)' · 이미 탄 2호선 글 · 배지는 뺌 ·
+    #   경로 카드 4호선 줄 실시간 · 다음 · 이동 중 카드 다음 탈 것 4호선 실시간 · health(개수만) · 설정 설명
+    cm = context(b, p, 8801, 'e2e-mid', **p.devices['iPhone 13'])
+    sm = datetime.datetime.fromisoformat(api(cm, 8801, 'e2e-mid', 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    hm0 = api(cm, 8801, 'x', 'GET', '/api/health')['seoulSubway']['mid']
+    l0 = api(cm, 8801, 'e2e-mid', 'GET', '/api/transit/live')
+    hm1 = api(cm, 8801, 'x', 'GET', '/api/health')['seoulSubway']['mid']
+    l1 = api(cm, 8801, 'e2e-mid', 'GET', '/api/transit/live?next=3&at=492')
+    m1 = l1.get('mid') or {}
+    check('[v2.6.0] 환승 지하철: 알려 주지 않으면 부르지 않음(mid 없음 · 환승 지하철 호출 0) → 다음 탈 4호선(08:12 도착 예상)을 알려 주면 그 한 곳만(동대문역사문화공원 · 예시 열차)',
+          'mid' not in l0 and hm1['callsToday'] == hm0['callsToday'] == 0 and m1.get('source') == 'seoul' and m1.get('i') == 3 and m1.get('line') == '4호선'
+          and m1.get('station') == '동대문역사문화공원' and len(m1.get('trains') or []) >= 1, json.dumps(m1, ensure_ascii=False)[:300])
+    pg = cm.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=sm); pg.goto('http://localhost:8801/')
+    pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('환승 지하철 실시간(4호선)')", timeout=15000)
+    dl = flat(pg.get_by_test_id('data-line').inner_text())
+    badges = pg.locator('[data-testid="data-line"] [data-source]').evaluate_all('els => els.map(e => e.dataset.source)')
+    check('[v2.6.0] 출처 줄: 07:40 출발 기준 · 환승 지하철 실시간(4호선) · 국민대행 버스 실시간 — 이미 탄 2호선 글은 뺌 · 배지는 서울시 실시간 하나',
+          '07:40 출발 기준 · 환승 지하철 실시간(4호선) · 국민대행 버스 실시간 ·' in dl and '첫 지하철' not in dl and badges == ['seoul'], f'{badges} / {dl}')
+    rc = pg.get_by_test_id('transit-route'); subs = rc.locator('li[data-kind="subway"]')
+    r1 = flat(subs.nth(0).inner_text()); r2 = flat(subs.nth(1).inner_text()); tagm = flat(rc.locator('div').first.locator('span').last.inner_text())
+    check('[v2.6.0] 내 경로 카드: 2호선 지남 · 4호선(동대문역사문화공원) 실시간 · N분 후 · 다음 · 실시간 반영', '지남' in r1 and '동대문역사문화공원' in r2 and re.search(r'실시간 · (곧|\d+분 후)', r2) is not None
+          and '다음' in r2 and tagm == '실시간 반영', f'{r1} / {r2} / {tagm}')
+    nxt = flat(pg.get_by_test_id('depart-next').inner_text())
+    check('[v2.6.0] 이동 중 카드: 다음 탈 것 4호선 · 동대문역사문화공원역 · 실시간', '4호선' in nxt and '동대문역사문화공원' in nxt and pg.get_by_test_id('depart-next-src').get_attribute('data-src') == 'live', nxt)
+    ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+    check('[v2.6.0] 휴대폰 화면 가로 넘침 없음 · 페이지 오류 없음', ov <= 0 and not errs, f'{ov} {str(errs)[:120]}')
+    pg.screenshot(path=str(OUT / 'live_iphone13_transfer_subway.png'))
+    hm2 = api(cm, 8801, 'x', 'GET', '/api/health')['seoulSubway']['mid']; mdump = json.dumps(hm2, ensure_ascii=False)
+    check('[v2.6.0] /api/health seoulSubway.mid: 하루 몫 300 · 1분 다시 쓰기 · 부른 수 · 받은 수 · 다 쓰지 않음 · 역 · 노선 이름 없음',
+          hm2['cap'] == 300 and hm2['reuseSec'] == 60 and hm2['callsToday'] >= 1 and hm2['used'] >= 1 and hm2['capReached'] is False and '동대문' not in mdump and '4호선' not in mdump, mdump[:300])
+    pg.get_by_role('link', name='설정').first.click()
+    pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
+    sbrow = flat(pg.get_by_test_id('subway-status').locator('xpath=..').inner_text())
+    check("[v2.6.0] 설정 '실시간 지하철' 설명: 첫 지하철은 출발 30분 전부터 · 환승 지하철은 출발했어요! 뒤 탈 때 15분 전부터 · 하루 900회 · 환승 지하철 300회",
+          '환승 경로의 첫 지하철은 출발 30분 전부터, 환승 지하철은 출발했어요! 뒤 탈 때 15분 전부터 받아요(하루 900회 상한 · 환승 지하철은 그중 300회까지).' in sbrow, sbrow[:200])
+    # [잘못 눌렀어요] 바로 뒤(다음 갱신 전): 남아 있는 환승 지하철 값은 말하지도 · 계산에 쓰지도 않음
+    pg.evaluate("location.hash = '#home'"); pg.get_by_test_id('depart-undo').wait_for(timeout=5000)
+    pg.get_by_test_id('depart-undo').click(); pg.get_by_test_id('depart-undo-yes').click()
+    pg.get_by_test_id('depart-next').wait_for(state='detached', timeout=5000)
+    dl2 = flat(pg.get_by_test_id('data-line').inner_text()); r4u = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="subway"]').nth(1).inner_text())
+    check('[v2.6.0] [잘못 눌렀어요] 바로 뒤: 출처 줄에 환승 지하철 글 없음 · 4호선 줄은 실시간 아님(다음 갱신 전에도)', '환승 지하철' not in dl2 and '실시간' not in r4u and '출발 기준' not in dl2, f'{dl2} / {r4u}')
+    cm.close()
+
     # v2.5.1 판단 경로 개수 · 확인 도구 path(가짜 경기도 API는 주변 정류소가 응답하므로 지금처럼 주변 정류소로 찾음 — 주변 정류소 실패 → 이름 검색은 백엔드 테스트 v251)
     check('[v2.5.1] health gyeonggiBus.judgePath: 주변 정류소로 1 · 이름 검색 0 · 주변 실패 0 · lastError 없음 · 확인 도구 selfJudge path around · checks.around.status ok',
           hg3['judgePath'] == {'around': 1, 'keyword': 0, 'aroundFailed': 0} and hg3['lastError'] is None and g11['selfJudge']['path'] == 'around'

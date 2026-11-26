@@ -72,7 +72,8 @@ export const api = {
   // v2.1 경로를 못 찾을 때 근처 국민대행 정류장으로 직행 안내(정류장 · 걷는 시간 · 다시 찾을 출발지)
   transitFallback: (body) => req('POST', '/api/me/transit', body),
   transitClear: () => req('POST', '/api/me/transit', { clear: true }),
-  transitLive: () => req('GET', '/api/transit/live'),
+  // v2.6.0 '출발했어요!' 뒤 다음 탈 환승 지하철(구간 번호 · 그 역 도착 예상 분)을 알려 주면 서버가 ±15분 · 하루 몫을 확인해 그 한 곳만
+  transitLive: (mid = null) => req('GET', mid ? `/api/transit/live?next=${encodeURIComponent(mid.i)}&at=${encodeURIComponent(mid.at)}` : '/api/transit/live'),
   // 홈 화면 앱으로 설정 이어받기
   handoff: () => req('POST', '/api/me/handoff', {}),
   claimHandoff: (token) => req('POST', '/api/handoff/claim', { token }, { auth: false }), // 받기 전에는 사용자 ID를 만들지 않음

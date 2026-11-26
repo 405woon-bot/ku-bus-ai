@@ -10,7 +10,7 @@ import { sampleIncidentRows } from '@shared/samples/incidentSample.js';
 import { summarizeNcst } from '@shared/weather.js';
 import { sampleNcstItems } from '@shared/samples/weatherSample.js';
 import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, josa, josaWa, ruleText } from '@shared/explain.js';
-import { KOOKMIN_GATE, TRANSIT, distanceM, fallbackText, isLateNight, legEnds, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
+import { KOOKMIN_GATE, MID_LIVE_KINDS, TRANSIT, distanceM, fallbackText, isLateNight, legEnds, midCheck, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
 import { SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
 import { exampleSubwayJson, liveSupport, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
 
@@ -133,11 +133,30 @@ export function sampleTransitSearch({ lat, lon, name, kind }, { scenario = 'ok',
 }
 const cycle = (m, period, phase) => { let d = (((phase - m) % period) + period) % period; if (d < 0.5) d += period; return d; };
 /**
+ * v2.6.0 환승 구간 예시(종류별 — 서버 midLive.js의 MID_FETCH와 같은 모양, 실시간 아님). 지금은 지하철만 —
+ * v2.7.0 중간 환승 버스는 여기에 bus 예시({ …base, source:'sample', buses })를 더함
+ */
+const SAMPLE_MID = {
+  subway: {
+    base: (M) => ({ station: M?.from?.name || null, line: M?.line || null }),
+    make(M, m, base) {
+      const at = Math.floor(Date.now() / 1000) * 1000;
+      const head = M.intervalMin || 5, next = cycle(m, head, 3);
+      const dest = (M.stations || []).includes(M.way) ? '종착' : M.way || '종착';
+      const json = exampleSubwayJson({ subwayId: M.subwayId || '1004', station: M.from.name, next: M.next, dest, etasSec: [0, 1, 2, 3].map((k) => (next + k * head) * 60), recptnMs: at });
+      const trains = trainsForLeg(parseSubwayArrivals(json, at).rows, M).map((t) => ({ etaSec: t.etaSec, approx: t.approx, dest: t.dest }));
+      return trains.length ? { ...base, source: 'sample', trains } : { ...base, source: 'nodata', reason: 'no-train', trains: [] };
+    },
+  },
+};
+
+/**
  * 실시간 재료(예시): 서버 /api/transit/live와 같은 모양. 지하철은 서버처럼 출발 30분 전부터만, 버스 · 지하철 도착은 배차간격으로 만든 가상 시각
  * v2.1: 서버처럼 경로 주변 돌발정보 · 날씨 · 마지막 국민대행 버스의 '왜 늦나요?'(예시 문장) — 미리보기 띠의 돌발 · 날씨 · 왜 늦나요 고르기를 그대로 씀.
  *   preview.explain === 'gap'이면 첫 지하철 열차가 늦게 오는 예시(첫 지하철 간격 한 줄 확인용)
+ * v2.6.0 환승 구간(서버와 같은 규칙 midCheck — 지금은 지하철만): '출발했어요!' 뒤 화면이 알려 준 다음 탈 환승 구간 한 곳 · 예정 탑승 ±15분에만 예시(SAMPLE_MID)
  */
-export function sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin, preview = {}, departedMin = null } = {}) {
+export function sampleTransitLive(route, now, { cls, walkTable, marginMin, personalOffsetMin, preview = {}, departedMin = null, midHint = null } = {}) {
   if (!route) return null;
   const { first, last } = legEnds(route), legs = route.legs, m = now.minutes;
   const out = { fetchedAt: new Date().toISOString(), first: null, final: null, sample: true };
@@ -171,6 +190,16 @@ export function sampleTransitLive(route, now, { cls, walkTable, marginMin, perso
       const json = exampleSubwayJson({ subwayId: F.subwayId || '1002', station: F.from.name, next: F.next, dest, etasSec: Array.from({ length: n }, (_, k) => (next + k * head) * 60), recptnMs: at });
       out.first = { i: first, kind: 'subway', source: 'sample', station: F.from.name, trains: trainsForLeg(parseSubwayArrivals(json, at).rows, F).map((t) => ({ etaSec: t.etaSec, approx: t.approx, dest: t.dest })) };
     }
+  }
+  if (midHint) {
+    const std = cls && departedMin != null ? planTransit({ route, cls, nowMin: m, walkTable, marginMin, personalOffsetMin, departedMin }) : null;
+    const chk = midCheck(route, std, midHint, m, { kinds: MID_LIVE_KINDS.filter((k) => SAMPLE_MID[k]) });
+    const M = Number.isInteger(chk.i) ? legs[chk.i] ?? null : null;
+    const X = M ? SAMPLE_MID[M.kind] || null : null;
+    const base = { i: chk.i ?? null, kind: M?.kind || null, ...(X ? X.base(M) : {}) };
+    if (chk.reason === 'no-hint') { /* 알려 준 구간 없음 */ }
+    else if (!chk.ok) out.mid = { ...base, source: chk.reason === 'line' || chk.reason === 'off' ? 'nodata' : 'skip', reason: chk.reason, trains: [] };
+    else out.mid = X.make(M, m, base);
   }
   return out;
 }

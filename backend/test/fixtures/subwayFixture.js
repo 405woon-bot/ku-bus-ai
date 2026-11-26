@@ -6,6 +6,7 @@ export const SUBWAY_TEST_KEY = 'SUBWAY-TEST-KEY';
 export const SUBWAY_STATIONS = {
   홍대입구: { subwayId: '1002', next: '신촌', dest: '성수', etasSec: [150, 420], updn: '내선' },
   '총신대입구(이수)': { subwayId: '1004', next: '사당', dest: '오이도', etasSec: [200], updn: '하행' },
+  동대문역사문화공원: { subwayId: '1004', next: '동대문', dest: '불암산', etasSec: [180, 480], updn: '상행' }, // v2.6.0 환승 지하철(예시 경로의 4호선)
 };
 const ok = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
 
