@@ -34,6 +34,11 @@ export const ARRIVALS = {
     { busRouteId: '900001112', rtNm: '1112', busRouteAbrv: '1112', staOrd: '2', arrmsg1: '6분10초후[3번째 전]', traTime1: '370', arrmsg2: '운행종료', traTime2: '0', term: '12' },
     { busRouteId: '900007211', rtNm: '7211', busRouteAbrv: '7211', staOrd: '14', arrmsg1: '1분후[1번째 전]', traTime1: '60', term: '9' },
   ],
+  // v2.7.0 환승 버스(서울시 정류장, 예시): 08920 시청앞.덕수궁 — 응답에 정류장 이름(stNm)이 있는 모양
+  '08920': [
+    { busRouteId: '900000150', rtNm: '150', busRouteAbrv: '150', stNm: '시청앞.덕수궁', staOrd: '31', arrmsg1: '4분후[2번째 전]', traTime1: '240', arrmsg2: '11분후[5번째 전]', traTime2: '660', term: '6' },
+    { busRouteId: '900000402', rtNm: '402', busRouteAbrv: '402', stNm: '시청앞.덕수궁', staOrd: '22', arrmsg1: '2분후[1번째 전]', traTime1: '120', term: '7' },
+  ],
 };
 
 /** 정류장 검색(getStationByName: stId·stNm·tmX·tmY·arsId / getStationByPos: stationId·stationNm·gpsX·gpsY·arsId·dist) */

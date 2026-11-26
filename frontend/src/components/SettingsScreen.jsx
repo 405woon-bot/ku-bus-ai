@@ -124,8 +124,25 @@ function gyeonggiStatus(h) {
   if (h.quotaToday || h.capReached) return ['warn', '오늘 한도 다 씀', '경기도 버스 하루 한도에 닿아 자정까지 배차간격으로 예상해요.'];
   if (h.lastError && !h.lastOkAt) return ['danger', '오류', `${h.lastError.message} — 그동안 배차간격으로 예상해요.`];
   const total = Object.values(h.callsToday || {}).reduce((a, b) => a + (Number(b) || 0), 0);
-  return h.lastOkAt ? ['ok', `연결됨 · 오늘 ${total}회`, `출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요(하루 ${h.cap || 900}회 상한).`]
+  // v2.7.0 환승 버스(경기도 정류장) 몫(h.mid.cap, 0이면 끔): 켜져 있으면 설명에 함께 · 오늘 몫을 다 쓴 날은 그 안내(상태 칩은 그대로)
+  const midCap = h.mid?.cap || 0;
+  if (h.lastOkAt && midCap && h.mid?.capReached) return ['ok', `연결됨 · 오늘 ${total}회`, `오늘 환승 버스 몫(${midCap}회)을 다 써 자정까지 경기도 정류장의 환승 버스는 배차간격으로 예상해요. 첫 버스는 그대로 받아요.`];
+  return h.lastOkAt ? ['ok', `연결됨 · 오늘 ${total}회`, midCap
+    ? `출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터, 출발했어요! 뒤 환승 버스가 경기도 정류장이면 탈 때 15분 전부터 경기도 도착 정보를 받아요(하루 ${h.cap || 900}회 상한 · 환승 버스는 그중 ${midCap}회까지).`
+    : `출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요(하루 ${h.cap || 900}회 상한).`]
     : ['ok', '준비됨', '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요. 받기 전에는 배차간격으로 예상해요.'];
+}
+
+/**
+ * v2.7.0 환승 경로일 때 '실시간 데이터' 설명 — 서울시 정류장 환승 버스 몫(health.live.mid · 0이면 끔) · 보호선(서울시 정류장 조회 800회)
+ *   미리보기(서버 없음)는 기본값(100회)으로 보여 줌
+ */
+function transitSrcDesc(mid) {
+  const base = '출발지 환승 경로로 안내 중이라 홈에서 첫 탑승 · 국민대행 버스 실시간을 30초마다 받아요(지하철은 출발 30분 전부터).';
+  if (mid?.guardReached) return `오늘 서울시 정류장 조회가 ${mid.guardAt || 800}회를 넘어 자정까지 환승 버스는 배차간격으로 예상해요. 첫 버스 · 국민대행 버스는 그대로 받아요.`;
+  if (mid?.cap && mid.capReached) return `오늘 환승 버스(서울시 정류장) 몫 ${mid.cap}회를 다 써 자정까지 그 환승 버스는 배차간격으로 예상해요. 첫 버스 · 국민대행 버스는 그대로 받아요.`;
+  const cap = mid ? Number(mid.cap) || 0 : 100;
+  return cap > 0 ? `${base} 출발했어요! 뒤에는 다음 탈 환승 지하철 · 버스를 탈 때 15분 전부터 받아요(서울시 정류장 환승 버스는 하루 ${cap}회까지).` : base;
 }
 
 /** 설정 · 서버 저장소 줄: 외부 DB(Upstash)면 서버가 잠들거나 다시 배포돼도 시간표 · 정류장 · 알림 구독이 그대로 */
@@ -171,7 +188,7 @@ function ServerGroup({ mode, live: directLive, transitLive = null, health, sync,
   const live = transitOn ? { source: transitLive?.sample ? 'sample' : 'seoul', incidents: transitLive?.incidents, weather: transitLive?.weather, trips: transitLive?.final?.trips || [] } : directLive;
   const src = live?.source ? { source: live.source, reason: live.reason, stale: Boolean(live.stale) || live.status === 'stale' }
     : health?.provider ? { source: health.provider, reason: health.reason } : null;
-  const srcDesc = transitOn ? '출발지 환승 경로로 안내 중이라 홈에서 첫 탑승 · 국민대행 버스 실시간을 30초마다 받아요(지하철은 출발 30분 전부터).'
+  const srcDesc = transitOn ? transitSrcDesc(health?.live?.mid)
     : !src ? '탑승 정류장을 고르면 표시돼요'
     : src.source === 'mock' ? '실시간을 받지 못해 예시 데이터로 계산 중이에요. 연결되면 자동으로 바뀌어요.'
       : src.stale ? '서울시 연결이 잠시 끊겨 직전 값을 쓰는 중이에요.' : '서울시 버스 API에서 20초마다 받아요.';

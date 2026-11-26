@@ -12,4 +12,5 @@ export const searchSampleCourses = () => [];
 export const sampleOriginSearch = () => [];
 export const sampleTransitSearch = () => null;
 export const sampleTransitLive = () => null;
+export const sampleMidBusTransit = () => null;
 export const SAMPLE_GPS = null;

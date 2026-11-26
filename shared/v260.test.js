@@ -2,7 +2,7 @@
 //   환승 지하철 구간 · 화면이 서버에 알려 줄 '다음 탈 환승 지하철'('출발했어요!' 뒤 · 다음 탈 구간이 환승 지하철일 때만 · 한 곳) ·
 //   서버가 부를지(출발 기록 · 환승 지하철 · 허용 목록 · 비상 끄기 · 예정 탑승 ±15분 · 기기 값이 표준값 −15 ~ +30분 밖이면 표준값) ·
 //   받은 열차로 탈 시각(승강장 2분) → 뒤 구간 다시 계산(환승 여유 3분 그대로) · 이미 탄 구간 고정값 · 지난 구간 규칙 · 첫 구간 · 버스 구간 · 출발 전에는 쓰지 않음 ·
-//   v2.7.0 준비: 구간 종류와 상관없는 계산(중간 환승 버스를 켜면 같은 규칙으로 — 지금은 꺼져 있음).
+//   구간 종류와 상관없는 계산(v2.7.0부터 중간 환승 버스도 같은 규칙으로 — 지하철만 고르면 v2.6.0과 같음).
 //   예시 경로(2호선 홍대입구 → 4호선 동대문역사문화공원 → 1213 길음역)와 열차 · 버스는 모두 예시입니다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -175,53 +175,53 @@ test('환승 지하철 실시간은 첫 구간 · 버스 구간 · 출발 전 �
   assert.equal(sim.legs.find((l) => l.i === 3).src, 'live');
 });
 
-/* ── v2.7.0 준비: 중간 환승 버스(지금은 꺼져 있음 — MID_LIVE_KINDS에 'bus'를 더하면 같은 계산) ── */
+/* ── v2.6.0 구조 · v2.7.0부터 중간 환승 버스도 켬(MID_LIVE_KINDS — 지하철만 고르면 예전과 같음) ── */
 // 예시 경로에 중간 버스를 넣은 모양: 2호선 → (중간 버스 7016, 예시) → 1213(마지막 국민대행 버스)
 const BUSMID = { ...ROUTE, legs: [L[0], L[1], L[2], { ...L[5], no: '7016', from: { ...L[5].from, name: '시청' }, intervalMin: 8 }, L[4], L[5], L[6]] };
-const BOTH = ['subway', 'bus'];
+const SUBWAY_ONLY = ['subway'];
 
-test('v2.7.0 준비: 켠 종류는 지금 지하철만 · 환승 구간 고르기는 종류와 상관없이(마지막 국민대행 버스는 rt.final이 맡아 빠짐)', () => {
-  assert.deepEqual(MID_LIVE_KINDS, ['subway']);
+test('켠 종류는 지하철 · 버스(v2.7.0) · 환승 구간 고르기는 종류와 상관없이(마지막 국민대행 버스는 rt.final이 맡아 빠짐)', () => {
+  assert.deepEqual(MID_LIVE_KINDS, ['subway', 'bus']);
   assert.ok(Object.isFrozen(MID_LIVE_KINDS));
-  assert.deepEqual([transferLegs(ROUTE), transferLegs(ROUTE, BOTH)], [[3], [3]], '예시 경로: 마지막 1213은 빠짐');
-  assert.deepEqual([transferLegs(BUSMID), transferLegs(BUSMID, BOTH), transferSubways(BUSMID)], [[], [3], []], '중간 버스는 켜야만');
-  assert.deepEqual(transferLegs(TWO, BOTH), [3, 5], '버스 → 공항철도 → 4호선 → 163: 첫 버스 · 마지막 버스는 빠짐');
-  assert.deepEqual(transferLegs({ legs: [{ kind: 'walk' }, { kind: 'bus' }, { kind: 'walk' }, { kind: 'bus' }, { kind: 'walk' }, { kind: 'subway' }] }, BOTH), [3, 5], '마지막이 지하철이면 중간 버스 · 마지막 지하철');
+  assert.deepEqual([transferLegs(ROUTE), transferLegs(ROUTE, SUBWAY_ONLY)], [[3], [3]], '예시 경로: 마지막 1213은 빠짐');
+  assert.deepEqual([transferLegs(BUSMID), transferLegs(BUSMID, SUBWAY_ONLY), transferSubways(BUSMID)], [[3], [], []], '중간 버스는 버스를 켰을 때만');
+  assert.deepEqual(transferLegs(TWO), [3, 5], '버스 → 공항철도 → 4호선 → 163: 첫 버스 · 마지막 버스는 빠짐');
+  assert.deepEqual(transferLegs({ legs: [{ kind: 'walk' }, { kind: 'bus' }, { kind: 'walk' }, { kind: 'bus' }, { kind: 'walk' }, { kind: 'subway' }] }), [3, 5], '마지막이 지하철이면 중간 버스 · 마지막 지하철');
 });
 
-test('v2.7.0 준비: 다음 탈 환승 구간 · 부를지(기준 T = 정류장 도착 예상 + 표준 기다림 · ±15분 · 표준값 범위)는 버스도 같은 규칙 — 지금은 켜지 않아 부르지 않음', () => {
+test('다음 탈 환승 버스 · 부를지(기준 T = 정류장 도착 예상 + 표준 기다림 · ±15분 · 표준값 범위)는 지하철과 같은 규칙 — 지하철만 고르면 부르지 않음', () => {
   const dep = DEP, p = (now, o = {}) => planTransit({ route: BUSMID, cls: CLS, nowMin: now, walkTable: {}, departedMin: dep, ...o });
   const l1 = legOf(p(at(7, 41)), 1), l3 = legOf(p(at(7, 41)), 3);
   const now = l1.board + 1; // 2호선을 탄 뒤
-  assert.equal(midHint(p(now), BUSMID, now), null, '지금(지하철만): 중간 버스는 알려 주지 않음');
-  const h = midHint(p(now), BUSMID, now, BOTH);
+  const h = midHint(p(now), BUSMID, now);
   assert.deepEqual(h, { i: 3, at: l3.arrive });
-  assert.deepEqual(midCheck(BUSMID, p(now), h, now), { ok: false, reason: 'not-transfer', i: 3 }, '지금(지하철만): 서버도 부르지 않음');
+  assert.equal(midHint(p(now), BUSMID, now, SUBWAY_ONLY), null, '지하철만: 중간 버스는 알려 주지 않음');
+  assert.deepEqual(midCheck(BUSMID, p(now), h, now, { kinds: SUBWAY_ONLY }), { ok: false, reason: 'not-transfer', i: 3 }, '지하철만: 서버도 부르지 않음');
   const T = l3.arrive + stdWait(BUSMID.legs[3]); // 배차 8분 → 표준 기다림 5분
   assert.equal(stdWait(BUSMID.legs[3]), 5);
-  assert.deepEqual(midCheck(BUSMID, p(T - 15), h, T - 15, { kinds: BOTH }), { ok: true, i: 3, kind: 'bus', T, S: l3.board, clamped: false });
-  assert.equal(midCheck(BUSMID, p(T - 15.1), h, T - 15.1, { kinds: BOTH }).reason, 'not-yet');
-  assert.equal(midCheck(BUSMID, p(T + 15.1), h, T + 15.1, { kinds: BOTH }).reason, 'passed');
-  assert.equal(midCheck(BUSMID, p(now), { i: 3, at: 600 }, now, { kinds: BOTH }).clamped, true, '표준값 범위 밖이면 표준값');
-  assert.equal(midCheck(BUSMID, p(now), { i: 5, at: 511 }, now, { kinds: BOTH }).reason, 'not-transfer', '마지막 국민대행 버스는 환승 구간이 아님');
+  assert.equal(midCheck(BUSMID, p(now), h, now).reason, 'not-yet', '2호선 타는 중 · 탑승 15분 전보다 이름');
+  assert.deepEqual(midCheck(BUSMID, p(T - 15), h, T - 15), { ok: true, i: 3, kind: 'bus', T, S: l3.board, clamped: false });
+  assert.equal(midCheck(BUSMID, p(T - 15.1), h, T - 15.1).reason, 'not-yet');
+  assert.equal(midCheck(BUSMID, p(T + 15.1), h, T + 15.1).reason, 'passed');
+  assert.equal(midCheck(BUSMID, p(now), { i: 3, at: 600 }, now).clamped, true, '표준값 범위 밖이면 표준값');
+  assert.equal(midCheck(BUSMID, p(now), { i: 5, at: 511 }, now).reason, 'not-transfer', '마지막 국민대행 버스는 환승 구간이 아님');
 });
 
-test('v2.7.0 준비: 받은 버스로 탈 시각(승강장 시간 없이 정류장 도착 뒤 첫 차 · 버스 번호) · 뒤 구간 다시 계산 — 지금은 켜지 않아 표준 기다림', () => {
+test('받은 버스로 탈 시각(승강장 시간 없이 정류장 도착 뒤 첫 차 · 버스 번호) · 뒤 구간 다시 계산 — 지하철만 고르면 표준 기다림', () => {
   const p = (now, o = {}) => planTransit({ route: BUSMID, cls: CLS, nowMin: now, walkTable: {}, departedMin: DEP, ...o });
   const l1 = legOf(p(at(7, 41)), 1), l3 = legOf(p(at(7, 41)), 3);
   const now = l1.board + 1;
   const bus = (minsFromNow) => ({ mid: { i: 3, kind: 'bus', source: 'seoul', buses: [{ no: '7016', etasSec: minsFromNow.map((x) => x * 60), termMin: 8, msgs: [] }] } });
   // 정류장 도착 시각 정각에 오는 버스는 탐(지하철처럼 2분을 더하지 않음) · 그보다 이른 버스는 못 탐
-  const exact = legOf(p(now, { rt: bus([l3.arrive - now]), midKinds: BOTH }), 3);
+  const exact = legOf(p(now, { rt: bus([l3.arrive - now]) }), 3);
   assert.deepEqual([exact.board, exact.src, exact.vehicle], [l3.arrive, 'live', '7016']);
-  const early = legOf(p(now, { rt: bus([l3.arrive - now - 0.5, l3.arrive - now + 3]), midKinds: BOTH }), 3);
+  const early = legOf(p(now, { rt: bus([l3.arrive - now - 0.5, l3.arrive - now + 3]) }), 3);
   assert.deepEqual([early.board, early.src], [l3.arrive + 3, 'live']);
   // 뒤 구간: 버스가 늦으면 마지막 버스 · 강의실 도착이 함께 밀림
-  const late = p(now, { rt: bus([l3.arrive - now + 12]), midKinds: BOTH }), std = p(now);
+  const late = p(now, { rt: bus([l3.arrive - now + 12]) }), std = p(now);
   assert.equal(legOf(late, 3).board, l3.arrive + 12);
   assert.ok(late.pick.classArriveMin > std.pick.classArriveMin);
-  // 지금(지하철만): 같은 값이 와도 쓰지 않음
-  const off = legOf(p(now, { rt: bus([l3.arrive - now + 12]) }), 3);
+  // 지하철만 고르면: 같은 값이 와도 쓰지 않음
+  const off = legOf(p(now, { rt: bus([l3.arrive - now + 12]), midKinds: SUBWAY_ONLY }), 3);
   assert.deepEqual([off.board, off.src], [l3.board, 'std']);
 });
-

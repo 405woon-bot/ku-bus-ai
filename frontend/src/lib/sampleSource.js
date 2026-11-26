@@ -11,7 +11,7 @@ import { summarizeNcst } from '@shared/weather.js';
 import { sampleNcstItems } from '@shared/samples/weatherSample.js';
 import { NO_CAUSE_TEXT, buildFacts, causeWords, delayMinutes, hasEvidence, josa, josaWa, ruleText } from '@shared/explain.js';
 import { KOOKMIN_GATE, MID_LIVE_KINDS, TRANSIT, distanceM, fallbackText, isLateNight, legEnds, midCheck, parseOdsayResult, planTransit, staleText, wantsLive } from '@shared/transitPlan.js';
-import { SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
+import { SAMPLE_ODSAY_MIDBUS, SAMPLE_ODSAY_ORIGIN, SAMPLE_ODSAY_RESPONSE, SAMPLE_ORIGINS } from '@shared/samples/odsaySample.js';
 import { exampleSubwayJson, liveSupport, parseSubwayArrivals, trainsForLeg } from '@shared/subwayArrivals.js';
 
 export { SAMPLE_COURSE_META };
@@ -133,8 +133,7 @@ export function sampleTransitSearch({ lat, lon, name, kind }, { scenario = 'ok',
 }
 const cycle = (m, period, phase) => { let d = (((phase - m) % period) + period) % period; if (d < 0.5) d += period; return d; };
 /**
- * v2.6.0 환승 구간 예시(종류별 — 서버 midLive.js의 MID_FETCH와 같은 모양, 실시간 아님). 지금은 지하철만 —
- * v2.7.0 중간 환승 버스는 여기에 bus 예시({ …base, source:'sample', buses })를 더함
+ * 환승 구간 예시(종류별 — 서버 midLive.js의 MID_FETCH와 같은 모양, 실시간 아님): v2.6.0 지하철 · v2.7.0 버스(서울시 정류장 모양의 예시 버스)
  */
 const SAMPLE_MID = {
   subway: {
@@ -148,7 +147,20 @@ const SAMPLE_MID = {
       return trains.length ? { ...base, source: 'sample', trains } : { ...base, source: 'nodata', reason: 'no-train', trains: [] };
     },
   },
+  bus: {
+    base: (M) => ({ stop: M?.from?.name || null, no: M?.no || null }),
+    make(M, m, base) {
+      const head = M.intervalMin || 8, next = cycle(m, head, 5); // 배차간격으로 만든 가상 도착(예시)
+      return { ...base, region: 'seoul', source: 'sample', buses: [{ no: M.no, etasSec: [next * 60, (next + head) * 60], termMin: head, msgs: [] }] };
+    },
+  },
 };
+
+/** v2.7.0 미리보기 '환승 버스 예시' 단추: 2호선 → 환승 버스 150 → 1213 경로를 저장한 상태(예시 경로 · 실제 경로 아님) */
+export function sampleMidBusTransit() {
+  const route = parseOdsayResult(SAMPLE_ODSAY_MIDBUS).paths?.[0] || null;
+  return route ? { mode: 'transit', origin: { name: SAMPLE_ODSAY_ORIGIN.name, kind: 'stop' }, route, savedAt: new Date().toISOString(), retry: null } : null;
+}
 
 /**
  * 실시간 재료(예시): 서버 /api/transit/live와 같은 모양. 지하철은 서버처럼 출발 30분 전부터만, 버스 · 지하철 도착은 배차간격으로 만든 가상 시각
@@ -198,7 +210,7 @@ export function sampleTransitLive(route, now, { cls, walkTable, marginMin, perso
     const X = M ? SAMPLE_MID[M.kind] || null : null;
     const base = { i: chk.i ?? null, kind: M?.kind || null, ...(X ? X.base(M) : {}) };
     if (chk.reason === 'no-hint') { /* 알려 준 구간 없음 */ }
-    else if (!chk.ok) out.mid = { ...base, source: chk.reason === 'line' || chk.reason === 'off' ? 'nodata' : 'skip', reason: chk.reason, trains: [] };
+    else if (!chk.ok) out.mid = { ...base, source: chk.reason === 'line' || chk.reason === 'off' ? 'nodata' : 'skip', reason: chk.reason, ...(M?.kind === 'bus' ? { buses: [] } : { trains: [] }) };
     else out.mid = X.make(M, m, base);
   }
   return out;

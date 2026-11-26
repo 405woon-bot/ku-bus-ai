@@ -250,7 +250,7 @@ export function simulate(route, D, { cls, nowMin, rt = null, walkTable, untilMin
   const legs = route.legs, idx = transitIdx(legs), firstI = idx[0], lastI = idx[idx.length - 1];
   const until = untilMin ?? (D + 300);
   const firstTimes = rt?.first && rt.first.i === firstI ? liveTimes(rt.first, legs[firstI], nowMin, until) : null;
-  // v2.6.0 환승 구간 실시간(첫 탑승이 아닌 구간 한 곳 — 켠 종류 midKinds, 지금은 지하철만) — 첫 구간과 같은 방식(liveTimes · liveBoard)
+  // v2.6.0 환승 구간 실시간(첫 탑승이 아닌 구간 한 곳 — 켠 종류 midKinds: 지하철 · v2.7.0 버스) — 첫 구간과 같은 방식(liveTimes · liveBoard)
   const midI = rt?.mid && Number.isInteger(rt.mid.i) && transferLegs(route, midKinds).includes(rt.mid.i) ? rt.mid.i : null;
   const midTimes = midI != null ? liveTimes(rt.mid, legs[midI], nowMin, until) : null;
   const finalCands = [];
@@ -321,7 +321,7 @@ export function firstBoard(route, sim) {
  * @param {number|null} [p.departedMin]  v2.2 '출발했어요!'를 누른 시각(분) — 있으면 '지금 출발'로 다시 계산하지 않고 그 시각에 나갔다고 보고 끝까지
  *   (수업이 시작된 뒤에도 도착 예정 시각까지는 'ok'로 안내)
  * @param {object|null} [p.pins]  v2.2 이미 탔다고 고정한 구간(lockPins) — simulate 참고
- * @param {string[]} [p.midKinds]  v2.6.0 실시간(rt.mid)을 쓰는 환승 구간 종류 — 기본 MID_LIVE_KINDS(지금은 지하철만)
+ * @param {string[]} [p.midKinds]  v2.6.0 실시간(rt.mid)을 쓰는 환승 구간 종류 — 기본 MID_LIVE_KINDS(지하철 · 버스)
  * @returns {{ state, mode:'transit', cls, pick?, status?, slackMin?, departNow?, departed?, personalMin?, liveFirst?, liveFinal? }}
  */
 export function planTransit({ route, cls, nowMin, rt = null, walkTable, marginMin = DEFAULTS.marginMin, personalOffsetMin = 0, departedMin = null, pins = null, midKinds = MID_LIVE_KINDS }) {
@@ -400,10 +400,10 @@ export function departProgress(plan, nowMin) {
 }
 /* ── v2.6.0 환승 구간 실시간('출발했어요!' 뒤 · 탈 때 ±15분 · 한 번에 한 곳) ──
  * 구간 종류와 상관없는 부분(어느 구간 · 기준 시각 · 창 · 다시 계산)은 여기, 받아 오기 · 하루 몫은 서버의 종류별 받아 오기(backend midLive.js).
- * 지금은 지하철만 켬. v2.7.0 중간 환승 버스(서울 · 경기)는 MID_LIVE_KINDS에 'bus'를 더하고 서버 받아 오기 · 화면 문구를 붙이면 됨
+ * v2.6.0 지하철 · v2.7.0 중간 환승 버스(서울시 · 경기도 정류장 — 마지막 국민대행 버스는 rt.final이 맡아 빠짐)
  *   (버스는 승강장 시간 없이 정류장 도착 뒤 첫 차 · 기준 시각은 같은 규칙 — 도착 예상 + 표준 기다림(배차 절반 + 1분)) */
-/** 실시간을 붙이는 환승 구간 종류(지금은 지하철만) */
-export const MID_LIVE_KINDS = Object.freeze(['subway']);
+/** 실시간을 붙이는 환승 구간 종류(v2.6.0 지하철 · v2.7.0 버스) */
+export const MID_LIVE_KINDS = Object.freeze(['subway', 'bus']);
 /**
  * 환승 구간(첫 탑승이 아닌 탈 것) 번호 — 마지막 국민대행 버스는 rt.final이 맡으므로 뺌(마지막 구간이 지하철이면 포함)
  * @param {string[]} [kinds]  고를 종류(기본 MID_LIVE_KINDS)

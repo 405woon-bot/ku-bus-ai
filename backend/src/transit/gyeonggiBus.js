@@ -21,8 +21,15 @@
 //   이름 검색 목록에서 고를 때는 번호 + 100m에 이름까지 같아야 함(주변 목록 없이는 '같은 번호의 다른 정류장이 근처에 있는지' 확인할 수 없어서 이름으로 메움).
 //   주변 정류소가 실패하고 이름 검색에서도 못 찾으면 '못 찾음(1일)'이 아니라 '실패'로 두고 다시 판단 — 실패가 이어지면 10 → 20 → 40 → 60분 간격.
 //   기다리는 시간(경로 계산 4초 · 확인 도구 5초)과 같은 판단 안에서 주변 정류소를 다시 부르지 않는 것은 그대로
+// v2.7.0 환승 버스(경기도 정류장) — '출발했어요!' 뒤 · 다음 탈 환승 버스 · 탈 때 ±15분일 때만(midLive.js) 같은 판단 · 같은 도착 정보로.
+//   하루 몫 GYEONGGI_BUS_MID_DAILY_CAP(비우면 150 · 0이면 끔 — 도착 정보 900 안에서, 외부 DB 날짜별 카운터) · 같은 정류장은 60초 안에 받은 값을 다시 씀 ·
+//   개수는 첫 버스(live)와 따로(health mid)
 import { seoulParts } from '../../../shared/time.js';
 import { distanceM } from '../../../shared/transitPlan.js';
+import { BUS_MID_SKIPS, MID_REUSE_SEC, createMidBudget, parseMidCap } from './midBudget.js';
+
+export const GG_MID_DEFAULT_CAP = 150;
+const MID_CNT = (d) => `kubusai:gg:mid:${d}`;
 
 const BASE = 'https://apis.data.go.kr/6410000';
 export const GG_SERVICES = Object.freeze({
@@ -223,6 +230,8 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
   const judgeStats = Object.fromEntries(JUDGE_KINDS.map((k) => [k, 0]));
   const judgePath = { around: 0, keyword: 0, aroundFailed: 0 }; // v2.5.1 정류장을 주변 정류소 · 이름 검색 중 어디서 찾았는지 · 주변 정류소를 못 받은 판단 수
   const arrCache = new Map(), arrInflight = new Map(); // 정류장 ID → { at, r }
+  // v2.7.0 환승 버스(경기도 정류장) 하루 몫 · 개수
+  const midBudget = createMidBudget({ cap: parseMidCap(env.GYEONGGI_BUS_MID_DAILY_CAP, GG_MID_DEFAULT_CAP), kv, keyOf: MID_CNT, today, extraSkips: BUS_MID_SKIPS });
   const redact = (s) => {
     let t = String(s ?? '');
     for (const k of [raw, keyValue, raw && encodeURIComponent(raw)]) if (k) t = t.split(k).join('[KEY]');
@@ -346,6 +355,14 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
     if (!judging.has(key)) judging.set(key, judgeAndKeep(leg, key).finally(() => judging.delete(key)));
     return null;
   }
+  /** v2.7.0 판단할 입력이 있는지(정류장 좌표 · 버스 번호 · 번호 또는 이름) */
+  const canJudge = (leg) => Boolean(raw) && legInput(leg).ok;
+  /** v2.7.0 보관한 판단 결과만(새로 판단하지 않음 — 창 밖 요청의 개수를 어느 쪽에 셀지 정할 때) */
+  function judgedFor(leg) {
+    const { key } = legInput(leg);
+    const c = key ? judged.get(key) : null;
+    return c && clock() - c.at < c.ttl ? c.value : null;
+  }
   /** (테스트 · 확인용) 뒤에서 하던 판단이 모두 끝날 때까지 기다림 */
   async function settle() { await Promise.all([...judging.values()]); }
 
@@ -375,6 +392,12 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
       state.live.failed++;
       return { source: r.status === 'cap' || r.status === 'quota' ? 'cap' : 'error', reason: r.status, region: 'gyeonggi', buses: [] };
     }
+    const buses = busesFrom(j, r, at, leg);
+    if (buses.length) state.live.used++; else state.live.empty++;
+    return { source: 'gyeonggi', region: 'gyeonggi', buses };
+  }
+  /** 판단 때 찾은 노선(노선 ID · 정류장 순번)이 같은 줄만 — 운행 종료 · 회차지 대기 제외 · 받은 뒤 흐른 시간을 뺌(첫 버스 · 환승 버스 같은 규칙) */
+  function busesFrom(j, r, at, leg) {
     const age = Math.max(0, (clock() - at) / 1000), term = num(leg?.intervalMin) > 0 ? num(leg.intervalMin) : null;
     const buses = [];
     for (const rt of j.routes || []) {
@@ -385,8 +408,27 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
       const etas = [1, 2].map((k) => etaOf(item, k)).filter((x) => x != null).map((x) => Math.round(x - age)).filter((x) => x > -30).map((x) => Math.max(0, x));
       if (etas.length) buses.push({ no: rt.no, etasSec: etas, termMin: term, msgs: [] });
     }
-    if (buses.length) state.live.used++; else state.live.empty++;
-    return { source: 'gyeonggi', region: 'gyeonggi', buses };
+    return buses;
+  }
+  /**
+   * v2.7.0 환승 버스(쓸 수 있는 경기도 정류장)의 도착 — midLive.js가 '출발했어요!' 뒤 · 탈 때 ±15분 · 한 곳일 때만 부름.
+   *   60초 안에 받은 값(첫 버스가 받은 값 포함)은 몫을 쓰지 않고 다시 씀 · 하루 몫을 다 쓰면 부르지 않음(source 'cap' · reason 'mid-cap') ·
+   *   도착 정보 하루 상한(900) · 한도 초과는 지금처럼(get이 막음). 개수는 midLive.js가 noteMid로(첫 버스 live와 따로)
+   */
+  async function midArrivalsFor(j, leg) {
+    roll();
+    const c = arrCache.get(j.stationId);
+    let v;
+    if (c && clock() - c.at < Math.max(cacheSec, MID_REUSE_SEC) * 1000) v = c;
+    else if (arrInflight.has(j.stationId)) v = await arrInflight.get(j.stationId);
+    else {
+      if (midBudget.over()) return { source: 'cap', reason: 'mid-cap', region: 'gyeonggi', buses: [] };
+      midBudget.take();
+      v = await stationArrivals(j.stationId);
+    }
+    const { at, r } = v;
+    if (!RANK.includes(r.status)) return { source: r.status === 'cap' || r.status === 'quota' ? 'cap' : 'error', reason: r.status, region: 'gyeonggi', buses: [] };
+    return { source: 'gyeonggi', region: 'gyeonggi', buses: busesFrom(j, r, at, leg) };
   }
   /** transitLive: 경기도 정류장인데 출발 30분 전보다 일러서 부르지 않은 횟수 */
   function noteSkip() { roll(); state.live.skipped++; }
@@ -488,17 +530,23 @@ export function createGyeonggiBusService({ env = process.env, kv = null, fetchIm
     stopFor,
     arrivalsFor,
     noteSkip,
+    canJudge, // v2.7.0
+    judgedFor, // v2.7.0
+    midArrivalsFor, // v2.7.0 환승 버스(경기도 정류장)
+    noteMid: midBudget.note, // v2.7.0 환승 버스 개수(midLive.js가 부름) — 개수만
+    midCap: midBudget.cap, // v2.7.0 0이면 경기도 정류장 환승 버스 실시간 끔
     settle,
     judge,
     health() {
       roll();
       return {
-        keyConfigured: Boolean(raw), stage: 'G2', use: '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보(+ 확인 도구)', cap, cacheSec,
+        keyConfigured: Boolean(raw), stage: 'G2', use: '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 · 출발했어요! 뒤 환승 버스가 경기도 정류장이면 탈 때 15분 전부터 경기도 도착 정보(+ 확인 도구)', cap, cacheSec,
         callsToday: { ...state.calls }, quotaToday: Object.values(state.quota).includes(today()), capReached: state.calls.arrival >= cap,
         lastOkAt: iso(state.lastOkAt), lastError: state.lastError && { ...state.lastError, at: iso(state.lastError.at) },
         // 판단 결과 개수(서버가 켜진 뒤 · 정류장 이름 · ID 없음) · 오늘 첫 버스 도착 정보를 쓴 횟수
         stops: { known: judged.size, ...judgeStats }, live: { ...state.live },
         judgePath: { ...judgePath }, // v2.5.1 주변 정류소로 찾은 판단 · 이름 검색으로 찾은 판단 · 주변 정류소를 못 받은 판단(개수만)
+        mid: midBudget.health(), // v2.7.0 환승 버스(경기도 정류장): 하루 몫 · 오늘 부른 수 · 다 씀 · 받음 · 없음 · 못 받음 · 이유별(개수만)
         test: { runsToday: state.testRuns, maxPerDay: GG_TEST_MAX_PER_DAY, lastAt: iso(testCache?.at) },
       };
     },

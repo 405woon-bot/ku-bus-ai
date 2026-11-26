@@ -64,6 +64,7 @@ export function parseArrivals(items) {
       staOrd: Math.trunc(num(it.staOrd)) || null, nextStop: String(it.nxtStn || ''), termMin: term > 0 ? term : null,
       etasSec: [sec(1, msg1), sec(2, msg2)].filter((v) => v != null && Number.isFinite(v)),
       msgs: [msg1, msg2], crowd: BUS_CROWD[it.congestion1] ?? null, ended: /운행\s*종료/.test(msg1),
+      stopName: String(it.stNm ?? '').trim(), // v2.7.0 환승 버스: 응답의 정류장 이름(있으면 경로의 정류장 이름과 같을 때만 씀)
     };
   }).filter((a) => a.busRouteId && a.no);
 }

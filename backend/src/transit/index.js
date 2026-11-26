@@ -10,6 +10,14 @@ import { seoulParts } from '../../../shared/time.js';
 import { mockTrips } from '../../../shared/stopTrips.js';
 import { SeoulApiError, createSeoulAdapter, createSeoulClient } from './seoulBus.js';
 import { createMemoryCache } from './cache.js';
+import { BUS_MID_SKIPS, MID_REUSE_SEC, createMidBudget, parseMidCap } from './midBudget.js';
+
+/** v2.7.0 환승 버스(서울시 정류장) 하루 몫 기본값 · 서울시 정류장 조회(정류소정보조회) 보호선 — 오늘 이만큼 부르면 환승 버스만 멈춤(첫 · 마지막 버스는 그대로) */
+export const SEOUL_BUS_MID_DEFAULT_CAP = 100;
+export const SEOUL_BUS_MID_GUARD = 800;
+const SEOUL_SVCS = ['stationinfo', 'busRouteInfo']; // 정류소정보조회 · 노선정보조회
+const SEOUL_CNT = (svc, d) => `kubusai:seoulbus:calls:${svc}:${d}`;
+const SEOUL_MID_CNT = (d) => `kubusai:seoulbus:mid:${d}`;
 
 /** 상태 칩·지연 분 계산을 붙인 노선 */
 const withStatus = (r) => {
@@ -77,13 +85,29 @@ export function createBaseline({ alpha = 0.2, file = null } = {}) {
  */
 export function createLiveService({
   env = process.env, fetchImpl, cache = createMemoryCache(), baseline = createBaseline(), log = console,
-  staleMaxMs = 3 * 60_000, quotaCooldownMs = 15 * 60_000, activeWindowMs = 15 * 60_000, background = true, clock = () => Date.now(),
+  staleMaxMs = 3 * 60_000, quotaCooldownMs = 15 * 60_000, activeWindowMs = 15 * 60_000, background = true, clock = () => Date.now(), kv = null,
 } = {}) {
   const ttlMs = Math.max(5, Number(env.LIVE_CACHE_SEC) || 30) * 1000;
   const key = String(env.SEOUL_BUS_API_KEY || '').trim();
+  // v2.7.0 서울시 버스 하루 호출 수(서비스별 — 지금까지는 서버가 켜진 뒤 누적 apiCalls만) · 외부 DB 날짜별 카운터(서버를 다시 켜도 그날 값 이어감)
+  const today = () => seoulParts(new Date(clock())).dateKey;
+  const daily = { date: today(), calls: Object.fromEntries(SEOUL_SVCS.map((k) => [k, 0])) };
+  const rollDaily = () => { const d = today(); if (d !== daily.date) Object.assign(daily, { date: d, calls: Object.fromEntries(SEOUL_SVCS.map((k) => [k, 0])) }); };
+  if (kv) for (const svc of SEOUL_SVCS) { const d = daily.date; kv.getNum(SEOUL_CNT(svc, d)).then((n) => { if (daily.date === d) daily.calls[svc] = Math.max(daily.calls[svc], n); }, () => {}); }
+  function countCall(path) {
+    const svc = String(path).split('/')[0];
+    if (!SEOUL_SVCS.includes(svc)) return;
+    rollDaily();
+    daily.calls[svc] += 1;
+    const d = daily.date;
+    if (kv) kv.incr(SEOUL_CNT(svc, d), 2 * 86400).then((n) => { if (daily.date === d) daily.calls[svc] = Math.max(daily.calls[svc], n); }, () => {});
+  }
+  const stationCallsToday = () => { rollDaily(); return daily.calls.stationinfo; };
+  // v2.7.0 환승 버스(서울시 정류장) 하루 몫 — SEOUL_BUS_MID_DAILY_CAP(비우면 100 · 0이면 끔) · 개수(health live.mid)
+  const midBudget = createMidBudget({ cap: parseMidCap(env.SEOUL_BUS_MID_DAILY_CAP, SEOUL_BUS_MID_DEFAULT_CAP), kv, keyOf: SEOUL_MID_CNT, today, extraSkips: BUS_MID_SKIPS });
   const client = createSeoulClient({
     key, fetchImpl, baseUrl: env.SEOUL_BUS_BASE_URL || undefined, format: env.SEOUL_BUS_FORMAT === 'json' ? 'json' : 'xml',
-    keyParam: env.SEOUL_BUS_KEY_PARAM || 'ServiceKey', timeoutMs: Number(env.SEOUL_BUS_TIMEOUT_MS) || 6000,
+    keyParam: env.SEOUL_BUS_KEY_PARAM || 'ServiceKey', timeoutMs: Number(env.SEOUL_BUS_TIMEOUT_MS) || 6000, onCall: countCall,
   });
   // 탑승 정류장 화면의 경유 정류소 캐시(기본 5분): 노선정보는 하루 한 번 갱신된다고 가이드에 적혀 있어 호출을 아낌
   const adapter = createSeoulAdapter({ client, cache, ttlMs, stationsTtlMs: Math.max(30, Number(env.ROUTE_CACHE_SEC) || 300) * 1000 });
@@ -217,6 +241,48 @@ export function createLiveService({
     return { arrivals, source: 'seoul', fetchedAt: new Date(clock()).toISOString() };
   }
 
+  /**
+   * v2.7.0 환승 버스(서울시 정류장)의 정류장 도착 — midLive.js가 '출발했어요!' 뒤 · 탈 때 ±15분 · 한 곳일 때만 부름.
+   *   60초 안에 받은 값은 다시 씀(환승 버스용 보관 · 사용자끼리 나눔) · 첫 · 마지막 버스가 30초 안에 받은 값이 있으면 그것(몫을 쓰지 않음) ·
+   *   한도 초과로 쉬는 중 · 오늘 정류소정보조회가 보호선(800)에 닿음 · 하루 몫을 다 씀 → 부르지 않음(source 'cap') · 못 받은 결과도 60초 동안 다시 부르지 않음
+   * @returns {Promise<{ source:'seoul'|'cap'|'off'|'nodata'|'error', reason?, arrivals, ageSec? }>}  arrivals의 도착 예정(초)은 ageSec 전 값
+   */
+  const cacheNow = typeof cache.now === 'function' ? cache.now : () => Date.now();
+  const midCache = new Map(), midInflight = new Map(); // arsId → { at, value }
+  async function stopArrivalsMid(arsId) {
+    if (!key) return { source: 'off', reason: 'no-key', arrivals: [] };
+    const own = midCache.get(arsId);
+    if (own && clock() - own.at < MID_REUSE_SEC * 1000) return { ...own.value, ageSec: Math.max(0, (clock() - own.at) / 1000) };
+    if (midInflight.has(arsId)) return midInflight.get(arsId);
+    const hit = await adapter.peekArrivals(arsId).catch(() => null);
+    if (hit) {
+      const ageSec = Math.max(0, (cacheNow() - hit.at) / 1000);
+      const value = { source: 'seoul', arrivals: hit.arrivals };
+      midCache.set(arsId, { at: clock() - ageSec * 1000, value });
+      return { ...value, ageSec };
+    }
+    if (clock() < state.quotaUntil) return { source: 'cap', reason: 'quota', arrivals: [] };
+    if (stationCallsToday() >= SEOUL_BUS_MID_GUARD) return { source: 'cap', reason: 'guard', arrivals: [] };
+    if (midBudget.over()) return { source: 'cap', reason: 'mid-cap', arrivals: [] };
+    midBudget.take();
+    const p = (async () => {
+      let value;
+      try {
+        value = { source: 'seoul', arrivals: await adapter.fetchArrivals(arsId) };
+        state.lastOkAt = clock();
+      } catch (e) {
+        const err = toErr(e);
+        noteError(err);
+        value = { source: err.kind === 'quota' ? 'cap' : err.kind === 'no-key' ? 'off' : 'error', reason: err.kind, arrivals: [] };
+      }
+      midCache.set(arsId, { at: clock(), value });
+      if (midCache.size > 300) midCache.delete(midCache.keys().next().value);
+      return { ...value, ageSec: 0 };
+    })().finally(() => midInflight.delete(arsId));
+    midInflight.set(arsId, p);
+    return p;
+  }
+
   // 30초마다 최근 15분 안에 요청된 노선을 미리 갱신 → 화면·스케줄러 요청은 캐시에서 바로 응답
   let timer = null;
   async function refreshActive() {
@@ -235,6 +301,9 @@ export function createLiveService({
     stationsOf: (no, busRouteId) => adapter.stationsOf(no, busRouteId),
     stopTrips,
     stopArrivals,
+    stopArrivalsMid, // v2.7.0 환승 버스(서울시 정류장)
+    noteMid: midBudget.note, // v2.7.0 환승 버스 개수(midLive.js가 부름) — 개수만(정류장 · 노선 이름 없음)
+    midCap: midBudget.cap, // v2.7.0 0이면 서울시 정류장 환승 버스 실시간 끔
     searchStops: (q) => lookup(() => adapter.searchStops(q)),
     nearStops: (lat, lon, radius = 400) => lookup(() => adapter.nearStops(lat, lon, radius)),
     health() {
@@ -248,6 +317,9 @@ export function createLiveService({
         quotaUntil: quota ? new Date(state.quotaUntil).toISOString() : null,
         apiCalls: client.stats.calls, activeRoutes: active.size,
         activeStops: [...stopsSeen.values()].filter((t) => clock() - t <= activeWindowMs).length,
+        // v2.7.0 오늘 호출 수(서비스별 — stationinfo 정류소정보조회 · busRouteInfo 노선정보조회) · 환승 버스(서울시 정류장) 몫 · 보호선
+        callsToday: (rollDaily(), { ...daily.calls }),
+        mid: { ...midBudget.health(), guardAt: SEOUL_BUS_MID_GUARD, guardReached: daily.calls.stationinfo >= SEOUL_BUS_MID_GUARD },
       };
     },
     stop() { clearInterval(timer); },

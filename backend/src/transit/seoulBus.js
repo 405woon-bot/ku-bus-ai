@@ -29,7 +29,7 @@ const norm = (s) => String(s ?? '').replace(/[\s.·()]/g, '');
  * @param {'xml'|'json'} [o.format='xml']  xml은 API 기본 형식, json은 resultType=json
  * @param {string} [o.keyParam='ServiceKey'] 가이드 예제 URL의 파라미터 이름(요청 표에는 serviceKey로도 표기)
  */
-export function createSeoulClient({ key, fetchImpl = globalThis.fetch, baseUrl = DEFAULT_BASE_URL, format = 'xml', keyParam = 'ServiceKey', timeoutMs = 6000 } = {}) {
+export function createSeoulClient({ key, fetchImpl = globalThis.fetch, baseUrl = DEFAULT_BASE_URL, format = 'xml', keyParam = 'ServiceKey', timeoutMs = 6000, onCall = null } = {}) {
   const raw = String(key || '').trim();
   const keyValue = raw && (/%[0-9A-Fa-f]{2}/.test(raw) ? raw : encodeURIComponent(raw));
   const redact = (s) => (raw ? String(s).split(raw).join('[KEY]').split(keyValue).join('[KEY]') : String(s));
@@ -41,6 +41,7 @@ export function createSeoulClient({ key, fetchImpl = globalThis.fetch, baseUrl =
     if (format === 'json') qs.set('resultType', 'json');
     const url = `${baseUrl}/${path}?${keyParam}=${keyValue}${qs.toString() ? `&${qs}` : ''}`;
     stats.calls++;
+    onCall?.(path); // v2.7.0 하루 호출 수(서비스별) 세기 — 'stationinfo/…' · 'busRouteInfo/…'
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res, text;
@@ -156,6 +157,17 @@ export function createSeoulAdapter({
 
   /** 정류장 하나의 모든 노선 도착 예정(국민대행이 아니어도) — 환승 경로의 첫 버스용 */
   const stopArrivals = async (arsId) => parseArrivals(await arrivalsAt(arsId));
+  /** v2.7.0 (환승 버스) 첫 · 마지막 버스가 받아 둔 정류장 도착(30초 캐시) — 부르지 않음. { arrivals, at(캐시 시계) } | null */
+  async function peekArrivals(arsId) {
+    const hit = await cache.get(`arrivals:${arsId}`);
+    return hit ? { arrivals: parseArrivals(hit.value), at: hit.at } : null;
+  }
+  /** v2.7.0 (환승 버스) 새로 받기 — 받은 값은 첫 · 마지막 버스와 같은 캐시에도 넣음 */
+  async function fetchArrivals(arsId) {
+    const { items } = await client.call('stationinfo/getStationByUid', { arsId });
+    await cache.set(`arrivals:${arsId}`, items, ttlMs);
+    return parseArrivals(items);
+  }
 
   /** 탑승 정류장 하나 → 국민대로 가는 노선별 실시간 도착·차내 시간·정체·원인 */
   async function stopTrips(arsId) {
@@ -211,5 +223,5 @@ export function createSeoulAdapter({
     const id = await routeId(no, explicitId);
     return { busRouteId: id, stations: await stations(id) };
   }
-  return { routeLive, stationsOf, routeId, searchStops, nearStops, stopTrips, stopArrivals };
+  return { routeLive, stationsOf, routeId, searchStops, nearStops, stopTrips, stopArrivals, peekArrivals, fetchArrivals };
 }

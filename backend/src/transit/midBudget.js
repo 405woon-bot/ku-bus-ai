@@ -18,14 +18,17 @@ export function parseMidCap(v, dflt = MID_DEFAULT_CAP) {
 
 const SKIPS = ['notDeparted', 'notTransfer', 'notYet', 'passed', 'line', 'off'];
 const COUNTS = ['used', 'empty', 'failed', 'clamped'];
-const zero = () => ({ used: 0, empty: 0, failed: 0, clamped: 0, skipped: Object.fromEntries(SKIPS.map((k) => [k, 0])) });
+/** v2.7.0 환승 버스가 더 세는 이유: 정류장 판단 중 · 정류장이 확실하지 않음(애매함 · 두 방향 · 판단 실패) · 정류장 번호 없음 · 같은 번호 두 줄 · 정류장 이름 다름 */
+export const BUS_MID_SKIPS = Object.freeze(['judging', 'stop', 'noArs', 'twoWay', 'mismatch']);
 
 /**
- * @param {{ cap: number, kv?: object|null, keyOf: (dateKey: string) => string, today: () => string }} o
- *   cap 하루 몫(0이면 꺼짐) · kv 외부 DB(getNum · incr) · keyOf 날짜별 카운터 키 · today 한국 날짜(YYYY-MM-DD)
+ * @param {{ cap: number, kv?: object|null, keyOf: (dateKey: string) => string, today: () => string, extraSkips?: string[] }} o
+ *   cap 하루 몫(0이면 꺼짐) · kv 외부 DB(getNum · incr) · keyOf 날짜별 카운터 키 · today 한국 날짜(YYYY-MM-DD) · extraSkips 이 종류만 더 세는 이유
  * @returns {{ cap, over(): boolean, take(): void, note(kind: string): void, health(): object }}
  */
-export function createMidBudget({ cap, kv = null, keyOf, today }) {
+export function createMidBudget({ cap, kv = null, keyOf, today, extraSkips = [] }) {
+  const skips = [...SKIPS, ...extraSkips.filter((k) => !SKIPS.includes(k))];
+  const zero = () => ({ used: 0, empty: 0, failed: 0, clamped: 0, skipped: Object.fromEntries(skips.map((k) => [k, 0])) });
   let date = today(), calls = 0, stats = zero();
   const sync = (d, n) => { if (date === d && Number.isFinite(n)) calls = Math.max(calls, n); };
   if (kv) { const d = date; kv.getNum(keyOf(d)).then((n) => sync(d, n), () => {}); }
@@ -44,7 +47,7 @@ export function createMidBudget({ cap, kv = null, keyOf, today }) {
     /** 개수 세기: used · empty · failed · clamped · 부르지 않은 이유(notDeparted · notTransfer · notYet · passed · line · off) */
     note(kind) {
       roll();
-      if (SKIPS.includes(kind)) stats.skipped[kind] += 1;
+      if (skips.includes(kind)) stats.skipped[kind] += 1;
       else if (COUNTS.includes(kind)) stats[kind] += 1;
     },
     health() {

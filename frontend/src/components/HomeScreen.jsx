@@ -129,21 +129,24 @@ function TransitPending({ onClick }) {
 }
 
 /**
- * v2.6.0 환승 구간 종류별 이름 · 실시간 문구 — 지금은 지하철만.
- * v2.7.0 중간 환승 버스는 화면 미리보기 승인 뒤 여기에 bus(예: '환승 버스' · 받은 곳에 따라 서울시/경기도)를 더함 — 없는 종류는 말하지 않음
+ * 환승 구간 종류별 이름 · 실시간 문구(v2.6.0 지하철 · v2.7.0 버스 — 첫 버스 문구와 같은 모양: 서울시 정류장 '환승 버스 실시간', 경기도 정류장 '…(경기도)')
+ *   없는 종류는 말하지 않음
  */
 const MID_TEXT = {
   subway: { name: '환승 지하철', live: (m) => `환승 지하철 실시간(${m.line || '지하철'})`, has: (m) => (m.trains?.length || 0) > 0 },
+  bus: { name: '환승 버스', live: (m) => (m.source === 'gyeonggi' ? '환승 버스 실시간(경기도)' : '환승 버스 실시간'), has: (m) => (m.buses?.length || 0) > 0 },
 };
-/** v2.6.0 환승 구간 한 마디('출발했어요!' 뒤 서버가 알려 준 상태) — 출발 전 · 창이 지남 · 끔 · 예시는 말하지 않음 */
+// '실시간 없음(배차로 예상)' — 노선이 실시간 목록 밖 · 끈 노선(지하철) / 정류장을 확실히 알 수 없음(버스: 판단 애매함 · 두 방향 · 실패 · 번호 없음 · 같은 번호 두 줄 · 이름 다름)
+const MID_NONE = new Set(['line', 'off', 'stop', 'no-ars', 'two-way', 'mismatch']);
+/** 환승 구간 한 마디('출발했어요!' 뒤 서버가 알려 준 상태) — 출발 전 · 창이 지남 · 정류장 판단 중 · 끔 · 예시는 말하지 않음 */
 function midPart(m) {
   const t = MID_TEXT[m?.kind];
   if (!t) return null;
-  if (m.source === 'seoul') return t.has(m) ? t.live(m) : `${t.name} 도착 정보 없음(배차로 예상)`;
+  if (m.source === 'seoul' || m.source === 'gyeonggi') return t.has(m) ? t.live(m) : `${t.name} 도착 정보 없음(배차로 예상)`;
   if (m.source === 'skip') return m.reason === 'not-yet' ? `${t.name} 실시간은 탑승 15분 전부터` : null;
-  if (m.source === 'nodata') return m.reason === 'line' || m.reason === 'off' ? `${t.name} 실시간 없음(배차로 예상)` : `${t.name} 도착 정보 없음(배차로 예상)`;
+  if (m.source === 'nodata') return MID_NONE.has(m.reason) ? `${t.name} 실시간 없음(배차로 예상)` : `${t.name} 도착 정보 없음(배차로 예상)`;
   if (m.source === 'off' || m.source === 'sample') return null;
-  return `${t.name} 실시간 못 받음(배차로 예상)`; // error · cap(오늘 환승 구간 몫 · 전체 상한) · quota
+  return `${t.name} 실시간 못 받음(배차로 예상)`; // error · cap(오늘 환승 몫 · 전체 상한 · 서울시 보호선) · quota
 }
 /** v2.6.0 '출발했어요!' 뒤 첫 탑승 구간을 이미 탔는지(누른 시각으로 계산한 예상) — 탔으면 첫 구간 글 · 배지는 빼고 다음 구간만 */
 export function firstBoarded(rec, route, nowMin) {
@@ -192,10 +195,10 @@ function TransitDataLine({ tl, departedMin = null, firstDone = false }) {
   else {
     // v2.5.0 '경기도 실시간' 배지는 첫 버스를 경기도 도착 정보로 계산할 때만(마지막 국민대행 버스는 지금처럼 서울시)
     // v2.6.0 환승 지하철도 서울시 자료 → '서울시 실시간'에 포함 · 출발 뒤 첫 구간을 이미 탔으면 첫 구간 배지는 빼고
-    //   (v2.7.0 중간 환승 버스가 경기도 도착 정보면 mid.source 'gyeonggi' → 아래 gg에 더함)
     const f = firstDone ? null : tl.rt?.first;
     const seoul = f?.source === 'seoul' || tl.rt?.final?.source === 'seoul' || (Boolean(dep) && tl.rt?.mid?.source === 'seoul');
-    const gg = f?.source === 'gyeonggi' && f.buses?.length > 0;
+    // v2.7.0 환승 버스가 경기도 정류장이면(그 버스 도착을 받았을 때) '경기도 실시간'도
+    const gg = (f?.source === 'gyeonggi' && f.buses?.length > 0) || (Boolean(dep) && tl.rt?.mid?.source === 'gyeonggi' && tl.rt.mid.buses?.length > 0);
     if (seoul || gg) tag = <>{seoul && <SourceTag source="seoul" stale={tl.status === 'stale'} />}{gg && <SourceTag source="gyeonggi" stale={tl.status === 'stale'} />}</>;
     text = tl.status === 'stale' ? `서버 연결이 끊겨 ${at} 정보를 보여 주는 중 · ${parts.join(' · ')}` : `${parts.join(' · ')}${at ? ` · ${at} 갱신` : ''}`;
     warn = tl.status === 'stale';

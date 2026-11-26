@@ -762,7 +762,7 @@ with sync_playwright() as p:
     ggt = flat(ggs.inner_text()); ggrow = flat(ggs.locator('xpath=ancestor::*[.//text()[contains(., "경기도 버스")]][1]').inner_text())
     sub_y = pg.get_by_test_id('subway-status').bounding_box()['y']; gg_y = ggs.bounding_box()['y']
     check("[v2.5.0] 설정 · 데이터 연결: '경기도 버스' 줄(실시간 지하철 바로 아래) · 연결됨 · 오늘 N회 · 출발 30분 전부터 · 하루 900회 상한",
-          re.fullmatch(r'연결됨 · 오늘 \d+회', ggt) is not None and gg_y > sub_y and '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터 경기도 도착 정보를 받아요(하루 900회 상한).' in ggrow,
+          re.fullmatch(r'연결됨 · 오늘 \d+회', ggt) is not None and gg_y > sub_y and '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터, 출발했어요! 뒤 환승 버스가 경기도 정류장이면 탈 때 15분 전부터 경기도 도착 정보를 받아요(하루 900회 상한 · 환승 버스는 그중 150회까지).' in ggrow,
           f'{ggt} / {ggrow[:160]}')
     pg.get_by_test_id('gyeonggi-status').scroll_into_view_if_needed(); pg.wait_for_timeout(200)
     pg.screenshot(path=str(OUT / 'live_iphone13_gyeonggi_settings.png'))
@@ -835,6 +835,79 @@ with sync_playwright() as p:
     dl2 = flat(pg.get_by_test_id('data-line').inner_text()); r4u = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="subway"]').nth(1).inner_text())
     check('[v2.6.0] [잘못 눌렀어요] 바로 뒤: 출처 줄에 환승 지하철 글 없음 · 4호선 줄은 실시간 아님(다음 갱신 전에도)', '환승 지하철' not in dl2 and '실시간' not in r4u and '출발 기준' not in dl2, f'{dl2} / {r4u}')
     cm.close()
+
+    # ⑮ v2.7.0 환승 버스(8801 · e2eServer가 넣어 둔 07:40 출발 기록 · 2호선 → 환승 버스 → 171):
+    #   서울시 정류장(가짜 08920 시청앞.덕수궁 150) → '환승 버스 실시간' · 서울시 실시간 배지 / 경기도 정류장(가짜 수원역 7770) → '환승 버스 실시간(경기도)' · 경기도 실시간 배지 ·
+    #   경로 카드 환승 버스 줄 실시간 · 다음 · 이동 중 카드 · health(개수만 · 보호선) · 설정 설명
+    hb0 = api(b.new_context(), 8801, 'x', 'GET', '/api/health')
+    cb = context(b, p, 8801, 'e2e-midbus', **p.devices['iPhone 13'])
+    sb = datetime.datetime.fromisoformat(api(cb, 8801, 'e2e-midbus', 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    lb0 = api(cb, 8801, 'e2e-midbus', 'GET', '/api/transit/live')
+    # 그 정류장을 처음 보면 이번엔 경기도 판단만(skip · judging) → 판단 뒤(가짜 경기도 API에 없는 번호 → 못 찾음) 서울시 정류장 도착
+    seen = []
+    for _ in range(8):
+        mb = api(cb, 8801, 'e2e-midbus', 'GET', '/api/transit/live?next=3&at=490').get('mid') or {}
+        seen.append(mb.get('reason') if mb.get('source') == 'skip' else mb.get('source'))
+        if mb.get('source') != 'skip': break
+        time.sleep(0.5)
+    check('[v2.7.0] 환승 버스(서울시 정류장): 알려 주지 않으면 없음 → 처음엔 정류장 판단만(judging) → 다음 요청부터 그 정류장 한 곳(08920 · 150번만 · 예시)',
+          'mid' not in lb0 and seen[0] == 'judging' and mb.get('kind') == 'bus' and mb.get('region') == 'seoul' and mb.get('source') == 'seoul' and mb.get('no') == '150' and mb.get('arsId') == '08920'
+          and [x.get('no') for x in mb.get('buses') or []] == ['150'], f"{seen} {json.dumps(mb, ensure_ascii=False)[:260]}")
+    pg = cb.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=sb); pg.goto('http://localhost:8801/')
+    pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('환승 버스 실시간')", timeout=15000)
+    dl = flat(pg.get_by_test_id('data-line').inner_text())
+    badges = pg.locator('[data-testid="data-line"] [data-source]').evaluate_all('els => els.map(e => e.dataset.source)')
+    check('[v2.7.0] 출처 줄: 07:40 출발 기준 · 환승 버스 실시간 · 국민대행 버스 실시간 — 이미 탄 2호선 글 없음 · 배지는 서울시 실시간 하나',
+          '07:40 출발 기준 · 환승 버스 실시간 · 국민대행 버스 실시간 ·' in dl and '(경기도)' not in dl and '첫 지하철' not in dl and badges == ['seoul'], f'{badges} / {dl}')
+    rc = pg.get_by_test_id('transit-route')
+    rb = flat(rc.locator('li[data-kind="bus"]').nth(0).inner_text()); r2 = flat(rc.locator('li[data-kind="subway"]').nth(0).inner_text())
+    check('[v2.7.0] 내 경로 카드: 2호선 지남 · 150(시청앞.덕수궁) 실시간 · N분 후 · 다음', '지남' in r2 and '시청앞.덕수궁' in rb and '150' in rb
+          and re.search(r'실시간 · (곧|\d+분 후)', rb) is not None and '다음' in rb, f'{r2} / {rb}')
+    nxb = flat(pg.get_by_test_id('depart-next').inner_text())
+    check('[v2.7.0] 이동 중 카드: 다음 탈 것 150번 버스 · 시청앞.덕수궁 · 실시간', '150' in nxb and '시청앞.덕수궁' in nxb and pg.get_by_test_id('depart-next-src').get_attribute('data-src') == 'live', nxb)
+    ov = pg.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+    check('[v2.7.0] 휴대폰 화면 가로 넘침 없음 · 페이지 오류 없음', ov <= 0 and not errs, f'{ov} {str(errs)[:120]}')
+    pg.screenshot(path=str(OUT / 'live_iphone13_transfer_bus.png'))
+    pg.get_by_role('link', name='설정').first.click()
+    pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
+    srow = flat(pg.get_by_text('실시간 데이터', exact=True).first.locator('xpath=../..').inner_text())
+    check("[v2.7.0] 설정 '실시간 데이터' 설명: 출발했어요! 뒤 다음 탈 환승 지하철 · 버스를 탈 때 15분 전부터 · 서울시 정류장 환승 버스 하루 100회",
+          '출발했어요! 뒤에는 다음 탈 환승 지하철 · 버스를 탈 때 15분 전부터 받아요(서울시 정류장 환승 버스는 하루 100회까지).' in srow, srow[:240])
+    cb.close()
+    # 경기도 정류장(수원역 7770): 처음이면 그 정류장 판단 중(최대 한 번 — 30일 보관) → 판단 뒤 경기도 도착 정보
+    cgx = context(b, p, 8801, 'e2e-midgg', **p.devices['iPhone 13'])
+    mg = {}
+    for _ in range(8):
+        mg = api(cgx, 8801, 'e2e-midgg', 'GET', '/api/transit/live?next=3&at=490').get('mid') or {}
+        if mg.get('source') != 'skip': break
+        time.sleep(0.5)
+    check('[v2.7.0] 환승 버스(경기도 정류장 수원역): 경기도 도착 정보(7770 · 판단 때 찾은 노선 · 순번)', mg.get('region') == 'gyeonggi' and mg.get('source') == 'gyeonggi'
+          and [x.get('no') for x in mg.get('buses') or []] == ['7770'], json.dumps(mg, ensure_ascii=False)[:300])
+    sg = datetime.datetime.fromisoformat(api(cgx, 8801, 'e2e-midgg', 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    pg = cgx.new_page(); errs = []
+    pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.clock.install(time=sg); pg.goto('http://localhost:8801/')
+    pg.wait_for_function("() => (document.querySelector('[data-testid=\"data-line\"]')?.innerText || '').includes('환승 버스 실시간(경기도)')", timeout=15000)
+    dlg = flat(pg.get_by_test_id('data-line').inner_text())
+    badges = pg.locator('[data-testid="data-line"] [data-source]').evaluate_all('els => els.map(e => e.dataset.source)')
+    check('[v2.7.0] 출처 줄(경기도 정류장): 환승 버스 실시간(경기도) · 배지 서울시 실시간(국민대행) + 경기도 실시간(환승 버스)',
+          '환승 버스 실시간(경기도)' in dlg and badges == ['seoul', 'gyeonggi'] and not errs, f'{badges} / {dlg}')
+    rg = flat(pg.get_by_test_id('transit-route').locator('li[data-kind="bus"]').nth(0).inner_text())
+    check('[v2.7.0] 내 경로 카드(경기도 정류장): 7770(수원역) 실시간 · N분 후 · 다음', '7770' in rg and '수원역' in rg and re.search(r'실시간 · (곧|\d+분 후)', rg) is not None and '다음' in rg, rg)
+    pg.get_by_role('link', name='설정').first.click()
+    pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
+    grow = flat(pg.get_by_test_id('gyeonggi-status').locator('xpath=ancestor::*[.//text()[contains(., "경기도 버스")]][1]').inner_text())
+    check("[v2.7.0] 설정 '경기도 버스' 설명: 출발했어요! 뒤 환승 버스가 경기도 정류장이면 탈 때 15분 전부터 · 하루 900회 · 환승 버스 150회",
+          '출발지 첫 버스가 경기도 정류장이면 출발 30분 전부터, 출발했어요! 뒤 환승 버스가 경기도 정류장이면 탈 때 15분 전부터 경기도 도착 정보를 받아요(하루 900회 상한 · 환승 버스는 그중 150회까지).' in grow, grow[:260])
+    cgx.close()
+    hb = api(b.new_context(), 8801, 'x', 'GET', '/api/health')
+    lm, gm = hb['live']['mid'], hb['gyeonggiBus']['mid']
+    dump = json.dumps([lm, gm, hb['live']['callsToday']], ensure_ascii=False)
+    check('[v2.7.0] /api/health: live.mid(서울시 정류장 — 몫 100 · 보호선 800 · 받음) · gyeonggiBus.mid(몫 150 · 받음) · live.callsToday(서울시 버스 오늘 호출 수) · 정류장 · 노선 이름 없음',
+          lm['cap'] == 100 and lm['guardAt'] == 800 and lm['guardReached'] is False and lm['used'] >= 1 and lm['callsToday'] >= 1 and gm['cap'] == 150 and gm['used'] >= 1
+          and hb['live']['callsToday']['stationinfo'] > hb0['live']['callsToday']['stationinfo'] and '시청' not in dump and '수원' not in dump and '08920' not in dump and '7770' not in dump, dump[:300])
 
     # v2.5.1 판단 경로 개수 · 확인 도구 path(가짜 경기도 API는 주변 정류소가 응답하므로 지금처럼 주변 정류소로 찾음 — 주변 정류소 실패 → 이름 검색은 백엔드 테스트 v251)
     check('[v2.5.1] health gyeonggiBus.judgePath: 주변 정류소로 1 · 이름 검색 0 · 주변 실패 0 · lastError 없음 · 확인 도구 selfJudge path around · checks.around.status ok',

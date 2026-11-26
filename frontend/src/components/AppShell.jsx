@@ -1,6 +1,7 @@
 import { DAYS, toHHMM } from '@shared/time.js';
 import { IconBus, IconCalendar, IconHome, IconReplay, IconSettings } from './ui.jsx';
 import { PREVIEW_DEVICES, PREVIEW_EXPLAIN, PREVIEW_INCIDENTS, PREVIEW_SOURCES, PREVIEW_WEATHER } from '../hooks/useTrips.js';
+import { sampleMidBusTransit } from '@source';
 
 export const TABS = [
   { id: 'home', label: '홈', Icon: IconHome },
@@ -114,6 +115,9 @@ export function PreviewBar({ preview, dispatch, nowMin = null }) {
         {/* v2.1 처음 화면(출발지 묻기) 보기 — 정류장 · 환승 경로를 비움(시간표는 그대로) */}
         <button type="button" data-testid="preview-fresh" onClick={() => dispatch({ type: 'previewFresh' })}
           className="h-7 whitespace-nowrap rounded-md border border-line bg-panel px-2 text-[12px] font-semibold text-ink hover:border-ink-muted">처음 화면</button>
+        {/* v2.7.0 환승 버스 예시: 2호선 → 150(환승 버스) → 1213 경로로 — 07:40 [출발했어요!] 뒤 08:05에 150번 줄이 '예시'(실시간 아님) */}
+        <button type="button" data-testid="preview-midbus" onClick={() => dispatch({ type: 'previewMidBus', transit: sampleMidBusTransit() })}
+          className="h-7 whitespace-nowrap rounded-md border border-line bg-panel px-2 text-[12px] font-semibold text-ink hover:border-ink-muted">환승 버스 예시</button>
         {/* '도착했어요!' 버튼 시간(수업 시작 30분 전 ~ 15분 뒤)으로 시계 옮기기 — 같은 날이라 도착 기록은 그대로 */}
         <label className="flex w-full items-center gap-1 md:w-auto">
           <span className="whitespace-nowrap font-semibold text-ink">시각 이동</span>

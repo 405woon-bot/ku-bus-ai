@@ -2,7 +2,7 @@
 //   화면이 '다음 탈 환승 지하철'을 알려 줄 때만(?next=&at=) · '출발했어요!' 기록 · 환승 지하철 · 허용 목록 · 비상 끄기 · 예정 탑승 ±15분 안에서만 서울시를 부름 ·
 //   한 번에 역 하나 · 1분 안에 받은 값은 다시 씀 · 하루 몫(SEOUL_SUBWAY_MID_DAILY_CAP, 비우면 300 · 0이면 끔 · 900 안에서) · 다 써도 첫 지하철은 그대로 ·
 //   서버 출발 알림(planFor)에는 없음 · /api/health 개수만(역 · 노선 이름 없음) · .env.example 값은 비어 있음 ·
-//   v2.7.0 준비: 종류별 받아 오기(지금은 지하철만) · 다시 쓸 수 있는 하루 몫(midBudget).
+//   종류별 받아 오기(v2.7.0부터 지하철 · 버스) · 다시 쓸 수 있는 하루 몫(midBudget).
 //   가짜 서울시 지하철만 씁니다(실제 호출 없음). 경로 · 열차는 모두 예시입니다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +66,7 @@ test('부르지 않음: 출발 기록 없음 · 환승 지하철 아님(첫 구�
   ];
   for (const [o, reason] of cases) {
     const out = await live(s, o);
-    assert.deepEqual([out.mid.source, out.mid.reason, out.mid.trains], ['skip', reason, []], reason);
+    assert.deepEqual([out.mid.source, out.mid.reason, out.mid.trains ?? out.mid.buses], ['skip', reason, []], reason);
   }
   assert.equal(midCalls(), 0, '환승 지하철 역은 한 번도 부르지 않음');
   const h = s.health().mid;
@@ -185,21 +185,18 @@ test('표준값 확인(이 파일의 기준): 07:40 출발 → 4호선 08:12 도
   assert.deepEqual([l.arrive, l.board], [492, 496]);
 });
 
-test('v2.7.0 준비: 종류별 받아 오기는 지금 지하철만(켠 종류 = 공용 MID_LIVE_KINDS ∩ 받아 오기) · 중간 버스를 알려 줘도 부르지 않음(어느 API도)', async () => {
-  assert.deepEqual(Object.keys(MID_FETCH), ['subway']);
-  assert.deepEqual(midKinds(), ['subway']);
-  // 예시 경로에 중간 버스(7016, 예시)를 넣은 경로: 2호선 → 7016 → 1213
-  const L = ROUTE.legs;
-  const busMid = { ...ROUTE, legs: [L[0], L[1], L[2], { ...L[5], no: '7016', from: { ...L[5].from, name: '시청' } }, L[4], L[5], L[6]] };
+test('종류별 받아 오기: 켠 종류 = 공용 MID_LIVE_KINDS ∩ 받아 오기(v2.7.0부터 지하철 · 버스) · 마지막 국민대행 버스를 알려 주면 부르지 않음(어느 API도)', async () => {
+  assert.deepEqual(Object.keys(MID_FETCH), ['subway', 'bus']);
+  assert.deepEqual(midKinds(), ['subway', 'bus']);
   const { s, f } = service();
   const prov = createMockProvider('jeongneung'), seen = [];
   const spy = { ...prov, stopArrivals: async (...a) => { seen.push(['stopArrivals', ...a]); return prov.stopArrivals(...a); } };
-  const out = await transitLive({ route: busMid, provider: spy, subway: s, nowDate: new Date(NOW), cls: CLS, walkTable: {}, departedMin: DEP, midHint: { i: 3, at: 492 } });
+  const out = await transitLive({ route: ROUTE, provider: spy, subway: s, nowDate: new Date(NOW), cls: CLS, walkTable: {}, departedMin: DEP, midHint: { i: 5, at: 511 } });
   assert.deepEqual([out.mid.source, out.mid.reason, out.mid.kind, f.calls.length, seen.length], ['skip', 'not-transfer', 'bus', 0, 0]);
   assert.equal(s.health().mid.skipped.notTransfer, 0, '지하철 쪽에 세지 않음');
 });
 
-test('v2.7.0 준비: 하루 몫(midBudget) — 새로 부를 때만 셈 · 다 쓰면 over · 0이면 꺼짐 · 자정에 새로 · 외부 DB 값 이어받기 · 개수만', async () => {
+test('하루 몫(midBudget) — 새로 부를 때만 셈 · 다 쓰면 over · 0이면 꺼짐 · 자정에 새로 · 외부 DB 값 이어받기 · 개수만', async () => {
   const day = { d: '2026-11-16' };
   const b = createMidBudget({ cap: 2, keyOf: (d) => `kubusai:test:mid:${d}`, today: () => day.d });
   assert.deepEqual([b.cap, b.over(), MID_REUSE_SEC], [2, false, 60]);

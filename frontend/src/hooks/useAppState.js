@@ -61,6 +61,8 @@ function reducer(s, a) {
     case 'resetAll': return initialState();
     // 미리보기 전용: '처음 화면(출발지 묻기)' 보기 — 정류장 · 환승 경로를 비움(시간표는 그대로)
     case 'previewFresh': return { ...s, stop: null, transit: emptyTransit(), departure: null, fired: {} };
+    // v2.7.0 미리보기 전용: '환승 버스 예시' — 환승 버스가 있는 예시 경로를 저장한 상태로(출발 기록 · 알림 기록은 처음부터)
+    case 'previewMidBus': return a.transit ? { ...s, transit: { ...emptyTransit(), ...a.transit }, departure: null, fired: {} } : s;
     default: return s;
   }
 }

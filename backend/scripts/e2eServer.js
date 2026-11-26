@@ -4,6 +4,7 @@
 // v2.4.0: 8801에 가짜 경기도 버스 API(G1 확인 도구 /api/gyeonggi/test), 8802는 경기도 키 없음
 // v2.5.0: 8801에 첫 버스가 경기도 정류장(가짜 수원역)인 저장 경로를 가진 e2e 사용자 둘(G2 경기도 첫 버스 실시간 · 출발 30분 전부터)
 // v2.6.0: 8801에 07:40 '출발했어요!'를 누른 e2e 사용자 하나(예시 경로 2호선 → 4호선 → 171) — 서버 시계 08:10부터 4호선이 다음 탈 환승 지하철
+// v2.7.0: 8801에 07:40 '출발했어요!'를 누른 e2e 사용자 둘(2호선 → 환승 버스 → 171) — 환승 버스가 가짜 서울시 정류장(08920 150) · 가짜 경기도 정류장(수원역 7770)
 // v2.1: 두 서버 모두 '근처 국민대행 정류장 찾기'(nearKu) — 8801은 가짜 서울시 정류소정보(정릉시장 08901), 8802는 키 없음(지어내지 않음)
 // 실행: node scripts/e2eServer.js   (frontend/dist가 먼저 빌드되어 있어야 함)
 import webpush from 'web-push';
@@ -21,7 +22,7 @@ import { createWeatherService } from '../src/transit/kmaWeather.js';
 import { fakeGeminiFetch } from '../test/fixtures/geminiFixture.js';
 import { createExplainService } from '../src/transit/geminiExplain.js';
 import { SAMPLE_COURSES, SAMPLE_COURSE_META } from '../../shared/samples/sampleCourses.js';
-import { SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
+import { SAMPLE_ODSAY_MIDBUS, SAMPLE_ODSAY_RESPONSE } from '../../shared/samples/odsaySample.js';
 import { parseOdsayResult, routeKey } from '../../shared/transitPlan.js';
 import { arrivalKey } from '../../shared/arrival.js';
 import { seoulParts } from '../../shared/time.js';
@@ -41,7 +42,7 @@ const now = () => new Date(base + (Date.now() - t0));
 const quiet = { warn() {}, info() {}, error() {} };
 const vapid = webpush.generateVAPIDKeys();
 
-const live = createLiveService({ env: { SEOUL_BUS_API_KEY: 'E2E-TEST-KEY' }, fetchImpl: fakeSeoulFetch(), background: false, log: quiet });
+const live = createLiveService({ env: { SEOUL_BUS_API_KEY: 'E2E-TEST-KEY' }, fetchImpl: fakeSeoulFetch(), background: false, log: quiet, kv: createKv({ clock: () => now().getTime() }) });
 const courses = { meta: { ...SAMPLE_COURSE_META, available: true, count: SAMPLE_COURSES.length }, courses: SAMPLE_COURSES };
 const incidents = createAccidentService({ env: { SEOUL_ACCIDENT_API_KEY: 'E2E-ACC-KEY' }, fetchImpl: fakeAccidentFetch(), clock: () => now().getTime() });
 const weather = createWeatherService({ env: { KMA_API_KEY: 'E2E-KMA-KEY' }, fetchImpl: fakeKmaFetch(), clock: () => now().getTime() });
@@ -85,6 +86,25 @@ store8801.update('e2e-mid', (u) => {
   u.transit = { mode: 'transit', origin: { name: '홍대입구역', kind: 'stop' }, route: midRoute, savedAt: now().toISOString(), retry: null };
   u.departure = { key: arrivalKey(seoulParts(now()).dateKey, midClass), at: new Date(now().getTime() - 30 * 60_000).toISOString(), departMin: 7 * 60 + 40, routeKey: routeKey(midRoute) };
 });
+// v2.7.0 환승 버스: 월 09:30 수업 · 예시 경로(2호선 → 환승 버스 → 171 정릉시장) · 07:40 출발 기록(e2e라 미리 넣어 둠)
+//   표준 계산: 2호선 07:48 탑승 → 08:03 내림 → 환승 버스 정류장 08:10 도착 · 08:14 예정 탑승 → 07:59 ~ 08:29에 환승 버스 실시간
+const midBusClass = { id: 'e2eMidBus', name: '운영체제', day: 0, start: '09:30', end: '10:45', building: '미래관', room: '302' };
+const midBusRoute = (busLeg) => {
+  const r = JSON.parse(JSON.stringify(SAMPLE_ODSAY_MIDBUS));
+  Object.assign(r.result.path[0].subPath[3], busLeg);
+  Object.assign(r.result.path[0].subPath[5], { startName: '정릉시장', startArsID: '08-901', lane: [{ busNo: '171', type: 11, busID: 1 }] });
+  return parseOdsayResult(r).paths[0];
+};
+for (const [id, route] of [
+  ['e2e-midbus', midBusRoute({ startArsID: '08-920' })], // 가짜 서울시 정류장 08920 시청앞.덕수궁 · 150
+  ['e2e-midgg', midBusRoute({ startName: '수원역', startX: 127.0003, startY: 37.2659, startArsID: '03-128', lane: [{ busNo: '7770', type: 4, busID: 1 }] })], // 가짜 경기도 수원역 · 7770
+]) {
+  store8801.update(id, (u) => {
+    u.classes = [midBusClass];
+    u.transit = { mode: 'transit', origin: { name: '홍대입구역', kind: 'stop' }, route, savedAt: now().toISOString(), retry: null };
+    u.departure = { key: arrivalKey(seoulParts(now()).dateKey, midBusClass), at: new Date(now().getTime() - 30 * 60_000).toISOString(), departMin: 7 * 60 + 40, routeKey: routeKey(route) };
+  });
+}
 // v2.2.3 예전에 정밀하게 저장된 GPS 출발지 옮기기(실서비스처럼 켜질 때 한 번 — e2e 저장소는 비어 있어 옮길 것은 없음)
 const coords = createCoordMigration({ store: store8801, odsay, clock: () => now().getTime(), log: quiet });
 coords.start();

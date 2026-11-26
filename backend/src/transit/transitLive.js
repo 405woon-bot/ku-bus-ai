@@ -11,7 +11,7 @@
 //     그 전에는 source 'skip'(화면: '첫 버스 실시간은 출발 30분 전부터'). 판단 결과가 없거나 확실하지 않으면 지금처럼 서울시(아래 코드 그대로)
 //   v2.6.0 환승 구간(첫 탑승이 아닌 탈 것 — 지금은 지하철만) — 화면 요청에서 기기가 '다음 탈 환승 구간'을 알려 줄 때만(midHint — 서버 출발 알림 계산에는 없음):
 //     '출발했어요!' 기록 · 실시간 허용 목록 · 예정 탑승 ±15분(기기 기준을 서버 표준값 −15 ~ +30분 안에서만, shared midCheck) · 한 곳 · 하루 몫 → midLive.js
-//     (v2.7.0 중간 환승 버스는 midLive.js의 종류별 받아 오기에 bus를 더함 — 여기는 그대로)
+//     v2.7.0 환승 버스(서울시 · 경기도 정류장)도 같은 길(midLive.js의 버스 받아 오기)
 import { legEnds, planTransit, wantsLive } from '../../../shared/transitPlan.js';
 import { midLive } from './midLive.js';
 import { liveSupport, trainsForLeg } from '../../../shared/subwayArrivals.js';
@@ -97,7 +97,7 @@ export async function transitLive({ route, provider, subway, gyeonggi = null, no
       }, (e) => { out.first = { i: first, kind: 'subway', source: 'error', reason: e?.message || 'api', trains: [] }; }));
     }
   }
-  if (midHint) jobs.push(midLive({ route, midHint, cls, nowMin, nowMs, walkTable, marginMin, personalOffsetMin, departedMin, deps: { subway } }).then((m) => { if (m) out.mid = m; }));
+  if (midHint) jobs.push(midLive({ route, midHint, cls, nowMin, nowMs, walkTable, marginMin, personalOffsetMin, departedMin, deps: { subway, provider, gyeonggi } }).then((m) => { if (m) out.mid = m; }));
   await Promise.all(jobs);
   if (extras) await addWhy(out, { legs, last, finalFull, nowDate, ...extras });
   return out;

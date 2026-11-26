@@ -1,11 +1,12 @@
 // 서울시 API 응답 캐시(기본 30초). 메모리가 기본이고, REDIS_URL이 있으면 Redis를 씁니다(여러 서버가 같은 캐시를 공유).
 // Redis는 선택 기능이라 package.json에 넣지 않았습니다 — 쓰려면 backend에서 `npm i redis` 후 REDIS_URL을 설정하세요.
-//   인터페이스: get(key) → { value, at } | null,  set(key, value, ttlMs)
+//   인터페이스: get(key) → { value, at } | null,  set(key, value, ttlMs),  now() — at과 같은 시계(v2.7.0 환승 버스가 받은 지 몇 초인지 셀 때)
 
 export function createMemoryCache({ max = 2000, clock = () => Date.now() } = {}) {
   const m = new Map();
   return {
     kind: 'memory',
+    now: clock,
     async get(key) {
       const e = m.get(key);
       if (!e) return null;
@@ -25,6 +26,7 @@ export function createMemoryCache({ max = 2000, clock = () => Date.now() } = {})
 export function createRedisCache(client, { prefix = 'kubusai:' } = {}) {
   return {
     kind: 'redis',
+    now: () => Date.now(),
     async get(key) {
       const raw = await client.get(prefix + key);
       if (!raw) return null;

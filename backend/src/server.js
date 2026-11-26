@@ -4,7 +4,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanRoute, createStoreFromEnv } from './store.js';
-import { createBaseline, createLiveService } from './transit/index.js';
+import { SEOUL_BUS_MID_GUARD, createBaseline, createLiveService } from './transit/index.js';
 import { createCacheFromEnv } from './transit/cache.js';
 import { reasonText } from '../../shared/liveStatus.js';
 import { createPusher, pushSummary, sendAndLog, upsertSubscription, validSubscription } from './push.js';
@@ -553,15 +553,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   // 외부 DB(Upstash) 주소 · 토큰이 있으면 거기에, 없으면 임시 파일에 저장. 다 읽을 때까지(최대 8초) 기다린 뒤 시작
   const store = createStoreFromEnv(env);
   await store.ready;
-  const provider = createLiveService({
-    env, cache: await createCacheFromEnv(env), baseline: createBaseline({ file: path.join(path.dirname(dataFile), 'baseline.json') }),
-  });
-  const pusher = createPusher(env);
   // 테스트 전용: FAKE_NOW(ISO 시각)부터 시계가 흐르게 함
   const t0 = Date.now(), base = env.FAKE_NOW ? new Date(env.FAKE_NOW).getTime() : null;
   const now = base ? () => new Date(base + (Date.now() - t0)) : () => new Date();
-  // v2.0 환승 경로: ODsay 검색 결과 · 하루 호출 수는 외부 DB(Upstash)에(없으면 메모리)
+  // v2.0 환승 경로: ODsay 검색 결과 · 하루 호출 수는 외부 DB(Upstash)에(없으면 메모리) — v2.7.0 서울시 버스 하루 호출 수 · 환승 버스 몫도
   const kv = createKvFromEnv(env, { clock: () => now().getTime() });
+  const provider = createLiveService({
+    env, cache: await createCacheFromEnv(env), baseline: createBaseline({ file: path.join(path.dirname(dataFile), 'baseline.json') }), kv,
+  });
+  const pusher = createPusher(env);
   const odsay = createOdsayService({ env, kv, clock: () => now().getTime() });
   const subway = createSubwayService({ env, kv, clock: () => now().getTime() });
   // v2.4.0 경기도 버스 G1 확인 도구 · v2.5.0 G2 첫 버스가 경기도 정류장이면 경기도 도착 정보
@@ -583,7 +583,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway, gyeonggi, nearKu, warmer, coords, retention });
   const port = Number(env.PORT) || 8787;
   const h = provider.health(), ih = incidents.health(), wh = weather.health(), eh = explainer.health(), si = store.info();
-  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건 · 미리 찾기 ${warmer.health().list}곳 ${warmer.health().hours})` : 'ODSAY_API_KEY 없음 → 근처 국민대행 정류장 안내'}, 실시간 지하철: ${subway.keyConfigured ? `서울시(허용 노선 ${subway.health().lines.on}개${subway.offLines.size ? ` · 끈 노선 ${[...subway.offLines].join(',')}` : ''})` : '키 없음 → 표준 대기'}, 경기도 버스: ${gyeonggi.keyConfigured ? '키 있음(G2 · 경기도 정류장 첫 버스 · 출발 30분 전부터)' : '키 없음 → 꺼짐'}, 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
+  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건 · 미리 찾기 ${warmer.health().list}곳 ${warmer.health().hours})` : 'ODSAY_API_KEY 없음 → 근처 국민대행 정류장 안내'}, 실시간 지하철: ${subway.keyConfigured ? `서울시(허용 노선 ${subway.health().lines.on}개${subway.offLines.size ? ` · 끈 노선 ${[...subway.offLines].join(',')}` : ''})` : '키 없음 → 표준 대기'}, 경기도 버스: ${gyeonggi.keyConfigured ? '키 있음(G2 · 경기도 정류장 첫 버스 · 출발 30분 전부터)' : '키 없음 → 꺼짐'}, 환승 버스: 서울시 하루 ${provider.midCap}회 · 경기도 하루 ${gyeonggi.midCap}회(보호선 서울시 정류장 조회 ${SEOUL_BUS_MID_GUARD}회), 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
   // Render가 서버를 멈출 때(잠들기 · 재배포) 아직 저장 안 된 기록을 마저 저장
   const bye = () => { scheduler.stop(); coords.stop(); retention.stop(); store.flush().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };

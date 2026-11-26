@@ -30,6 +30,9 @@ const STOP = {
   동대문역사문화공원: { name: '동대문역사문화공원', x: 127.007396, y: 37.565829, ars: '99-202' },
 };
 const LINE2 = ['홍대입구', '신촌', '이대', '아현', '충정로', '시청', '을지로입구', '을지로3가', '을지로4가', '동대문역사문화공원'];
+// v2.7.0 체험판 '환승 버스 예시'(예시 · 실제 경로 아님): 2호선 홍대입구 → 시청 · 환승 버스 150(시청앞.덕수궁 → 길음역) · 1213 → 국민대학교앞
+const LINE2_CITYHALL = ['홍대입구', '신촌', '이대', '아현', '충정로', '시청'];
+const CITYHALL_STOP = { name: '시청앞.덕수궁', x: 126.976876, y: 37.565431, ars: '99-203' };
 const LINE4 = ['동대문역사문화공원', '동대문', '혜화', '한성대입구', '성신여대입구', '길음'];
 
 export const SAMPLE_ODSAY_ORIGIN = { name: '홍대입구역', lat: 37.557527, lon: 126.923778 };
@@ -59,3 +62,21 @@ export const SAMPLE_ODSAY_RESPONSE = {
 };
 /** 미리보기 출발지 검색용 예시 장소(실제 검색 결과 아님) — 예시 경로는 이 출발지 하나뿐 */
 export const SAMPLE_ORIGINS = [{ arsId: '99201', name: '홍대입구역', lat: 37.556911, lon: 126.924422 }];
+
+/**
+ * v2.7.0 체험판 '환승 버스 예시' 단추용 경로 하나(ODsay 응답 형식의 예시 — 실제 경로 아님).
+ *   2호선 홍대입구 → 시청(15분) · 걸어서 4분 · 환승 버스 150(간선, 배차 6분) 시청앞.덕수궁 → 길음역(26분) · 걸어서 2분 · 1213 길음역 → 국민대학교앞
+ */
+export const SAMPLE_ODSAY_MIDBUS = {
+  result: {
+    searchType: 0, outTrafficCheck: 0, busCount: 0, subwayCount: 0, subwayBusCount: 1, pointDistance: 8780, startRadius: 700, endRadius: 700,
+    path: [
+      {
+        pathType: 3,
+        info: { trafficDistance: 12100, totalWalk: 580, totalTime: 66, payment: 1500, busTransitCount: 2, subwayTransitCount: 1, mapObj: 'example', firstStartStation: '홍대입구', lastEndStation: '국민대학교앞', totalStationCount: 27, busStationCount: 22, subwayStationCount: 5, totalDistance: 12680, totalWalkTime: -1 },
+        subPath: [walk(280, 4), subway('수도권 2호선', 2, LINE2_CITYHALL, 15, '시청', 2, 5), walk(200, 4), bus('150', 11, CITYHALL_STOP, STOP.길음역, 26, 14, 6), walk(100, 2),
+          bus('1213', 12, STOP.길음역, STOP.국민대학교앞, 12, 8, 9), walk(180, 3)],
+      },
+    ],
+  },
+};
