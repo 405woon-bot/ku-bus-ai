@@ -4,6 +4,7 @@
 //   데이터 없음 · 오류: 맨 위에 { status, code: 'INFO-200' | 'INFO-100' | 'ERROR-337' …, message }
 //   barvlDt(남은 초)는 코레일 노선 등에서 0(=모름)인 경우가 많아, 0이면 arvlMsg2 · arvlCd로 보수적으로(더 일찍 온다고) 추정합니다.
 //   v2.3.0 실시간 허용 목록(19개 노선) · 노선 묶음별 열차 고르기(직통 · ITX 제외, 애매하면 쓰지 않고 배차로 예상)
+//   v2.5.2 방면은 마지막 '-' 뒤에서 읽음('-2행 - 일원방면' → '일원') · 종착이 역 이름이 아니면('-2'처럼 숫자 · 기호뿐) 어디까지 가는지 몰라 쓰지 않음(dest로 셈)
 
 const str = (v) => (v == null ? '' : String(v)).trim();
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -99,6 +100,14 @@ export function rowEta(r, fetchedMs) {
 }
 
 /**
+ * v2.5.2 '○○행 - ○○방면'의 방면 역 — 마지막 '-' 뒤를 읽음(종착 글에 '-'가 있어도: '-2행 - 일원방면' → '일원'). 확인 도구(/api/subway/test)도 같은 규칙.
+ *   v2.5.1까지는 처음 '-' 뒤를 읽어 '2행 - 일원'이 되었고, 다른 방향으로 보고 빠졌음(규칙이 아니라 우연히)
+ */
+export const DIR_RE = /[-–]\s*([^-–]+?)\s*방면/;
+/** v2.5.2 종착이 역 이름이 아님 — 글자(한글 · 영문) 없이 숫자 · 기호뿐('-2' 등). 빈 칸은 지금처럼 따로 보지 않음 */
+export const oddDest = (v) => { const d = str(v); return d !== '' && !/[가-힣A-Za-z]/.test(d); };
+
+/**
  * 한 줄 → { subwayId, updn, next(방면 역), dest(종착), etaSec(받은 시각 기준), approx, express, type(열차 종류 원문), last, code, msg }
  * 떠난 열차(arvlCd 2)와 5분 넘게 지난 기록은 null (남은 시간 규칙은 rowEta)
  */
@@ -109,7 +118,7 @@ export function parseSubwayRow(r, fetchedMs) {
   const msg = str(r?.arvlMsg2);
   const line = str(r?.trainLineNm);
   return {
-    subwayId: str(r?.subwayId), updn: str(r?.updnLine), next: (/[-–]\s*(.+?)\s*방면/.exec(line) || [])[1] || '',
+    subwayId: str(r?.subwayId), updn: str(r?.updnLine), next: (DIR_RE.exec(line) || [])[1] || '',
     dest: str(r?.bstatnNm), etaSec: Math.max(0, Math.round(eta)), approx, code,
     express: /급행|특급/.test(str(r?.btrainSttus)), type: str(r?.btrainSttus).slice(0, 12), last: str(r?.lstcarAt) === '1', msg,
   };
@@ -137,7 +146,7 @@ function typeOk(r, group, expressLeg) {
  * 방향을 확인할 수 없으면 쓰지 않음(보수적 → 표준 대기 시간으로). 1~9호선만 예전처럼 상행/하행으로 대신(2호선 제외)
  * v2.3.0 구간에 노선 번호가 있으면 서울시 줄도 번호가 정확히 같아야 함(번호가 빈 줄은 뺌)
  * @param {Array} rows parseSubwayRow 결과  @param {object} leg 경로의 지하철 구간(shared/transitPlan.js)
- * @param {object|null} [drops] 뺀 이유를 셀 곳(선택) — { line: 번호 빈 줄, dir: 방향을 알 수 없는 줄, type: 열차 종류, dest: 하차역 전에 끝남 }.
+ * @param {object|null} [drops] 뺀 이유를 셀 곳(선택) — { line: 번호 빈 줄, dir: 방향을 알 수 없는 줄, type: 열차 종류, dest: 하차역 전에 끝남 · (v2.5.2) 종착이 역 이름이 아님 }.
  *   다른 노선 · 반대 방향처럼 원래 빠지는 열차는 세지 않음
  */
 export function trainsForLeg(rows, leg, drops = null) {
@@ -150,6 +159,7 @@ export function trainsForLeg(rows, leg, drops = null) {
     if (leg?.subwayId) { if (!r.subwayId) return drop('line'); if (r.subwayId !== leg.subwayId) return false; }
     if (next) { if (!stationKey(r.next)) return drop('dir'); if (stationKey(r.next) !== next) return false; } else if (!updn) return drop('dir'); else if (r.updn !== updn) return false;
     if (!typeOk(r, group, expressLeg)) return drop('type');
+    if (oddDest(r.dest)) return drop('dest'); // v2.5.2 종착이 역 이름이 아니면('-2' 등) 내 하차역까지 가는지 몰라 쓰지 않음
     const di = stations.indexOf(stationKey(r.dest));
     if (di >= 0 && di < last) return drop('dest'); // 하차역보다 앞에서 끝나는 열차
     return true;

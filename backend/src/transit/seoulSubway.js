@@ -8,7 +8,8 @@
 //   · v2.3.0 /api/health에 허용 목록(켠 개수 · 끈 번호) · 오늘 열차를 뺀 횟수 · 목록 밖이라 부르지 않은 횟수 · 시험 횟수(역 · 노선별 사용 기록은 싣지 않음)
 //   · v2.4.1 한 번에 40줄(…/0/40/역명, 호출 수는 그대로 1건) — 큰 환승역(서울역 등)에서 20줄에 잘리던 노선까지. 서울시가 40줄 요청을 받지 않으면
 //     (처음 보는 오류 코드 · HTTP 4xx) 그날은 자동으로 20줄로 되돌리고 한 번 더(health rows · rowsFallback). 확인 도구는 노선별로 남은 시간을 어떻게 구했는지(eta) 개수도
-import { LIVE_LINES, liveLine, parseOffLines, parseSubwayArrivals, rowEta, stationKey, subwayStatus } from '../../../shared/subwayArrivals.js';
+//   · v2.5.2 방면 형식은 실제 계산과 같은 규칙(shared DIR_RE — 마지막 '-' 뒤)으로 셈 · 노선별 '종착이 역 이름이 아닌 줄'(oddDest, 예: '-2') 개수와 예 한 줄
+import { DIR_RE, LIVE_LINES, liveLine, oddDest, parseOffLines, parseSubwayArrivals, rowEta, stationKey, subwayStatus } from '../../../shared/subwayArrivals.js';
 import { seoulParts } from '../../../shared/time.js';
 
 const BASE = 'http://swopenapi.seoul.go.kr/api/subway';
@@ -30,7 +31,6 @@ const TEST_TTL_MS = 10 * 60_000;
 const TEST_NOTE = '고정된 공개 역 8곳으로 시험한 결과예요(사용자 경로 · 위치와 무관, 인증키는 나오지 않아요). 열차가 다니는 낮 시간에 열어 주세요. 같은 결과는 10분 동안 보관하고 하루 3번까지 새로 시험해요.';
 // 첫 역에서 막혔을 때 이유별 안내(키 값은 싣지 않음)
 const TEST_WHY = { auth: '인증키(SEOUL_SUBWAY_KEY)를 확인해 주세요', cap: '오늘 호출 상한에 닿았어요(한국 시각 자정에 초기화)', quota: '서울시 하루 한도를 넘었어요(한국 시각 자정에 초기화)', error: '서울시 연결을 확인해 주세요', api: '서울시 응답 형식이 달라요' };
-const DIR_RE = /[-–]\s*(.+?)\s*방면/;
 const cut = (v, n = 40) => (v == null ? '' : String(v)).trim().slice(0, n);
 const zero = () => ({ line: 0, dir: 0, type: 0, dest: 0 });
 
@@ -47,20 +47,22 @@ export function summarizeTest(results, fetchedMs = Date.now()) {
     for (const r of res.rows) {
       const raw = cut(r?.subwayId, 8), id = /^\d{1,6}$/.test(raw) ? raw : raw ? '(형식이 다른 번호)' : '(빈 번호)';
       const known = liveLine(id);
-      if (!byId.has(id)) byId.set(id, { name: known?.name || '목록에 없는 번호', group: known?.group || null, rows: 0, types: new Map(), dirFormat: 0, etaZero: 0, eta: new Map(), stations: [], sample: null });
+      if (!byId.has(id)) byId.set(id, { name: known?.name || '목록에 없는 번호', group: known?.group || null, rows: 0, types: new Map(), dirFormat: 0, etaZero: 0, eta: new Map(), oddDest: 0, oddDestSample: null, stations: [], sample: null });
       const L = byId.get(id);
       L.rows++;
       const t = cut(r?.btrainSttus, 12) || '(빈 칸)';
       L.types.set(t, (L.types.get(t) || 0) + 1);
       if (DIR_RE.test(cut(r?.trainLineNm, 60))) L.dirFormat++;
       if (!(Number(r?.barvlDt) > 0)) L.etaZero++;
+      // v2.5.2 종착이 역 이름이 아닌 줄(숫자 · 기호뿐 — 실제 계산에서는 쓰지 않음) 개수와 처음 본 예 한 줄
+      if (oddDest(r?.bstatnNm)) { L.oddDest++; if (!L.oddDestSample) L.oddDestSample = { station: res.station, trainLineNm: cut(r?.trainLineNm), bstatnNm: cut(r?.bstatnNm, 20) }; }
       const how = rowEta(r, fetchedMs).how; // v2.4.1 실제 계산과 같은 규칙으로: 초 · 도착 · 문구 · 몇 번째 전역 · 전역 코드 · 떠남 · 지난 기록 · 모름
       L.eta.set(how, (L.eta.get(how) || 0) + 1);
       if (!L.stations.includes(res.station)) L.stations.push(res.station);
       if (!L.sample) L.sample = { station: res.station, trainLineNm: cut(r?.trainLineNm), btrainSttus: cut(r?.btrainSttus, 12), arvlMsg2: cut(r?.arvlMsg2), updnLine: cut(r?.updnLine, 8), bstatnNm: cut(r?.bstatnNm, 20) };
     }
   }
-  const lines = Object.fromEntries([...byId].map(([id, L]) => [id, { ...L, types: Object.fromEntries(L.types), eta: Object.fromEntries(L.eta) }]));
+  const lines = Object.fromEntries([...byId].map(([id, { oddDestSample, ...L }]) => [id, { ...L, types: Object.fromEntries(L.types), eta: Object.fromEntries(L.eta), ...(oddDestSample ? { oddDestSample } : {}) }]));
   // 광역 · 민자 노선 판정(1~9호선은 지금까지 쓰던 노선이라 판정하지 않음 — 보이면 lines에는 나옴)
   const check = {};
   for (const [id, want] of Object.entries(TEST_EXPECT)) {
