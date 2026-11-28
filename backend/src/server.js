@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cleanRoute, createStoreFromEnv } from './store.js';
+import { cleanRoute, createStoreFromEnv, revOf } from './store.js';
 import { SEOUL_BUS_MID_GUARD, createBaseline, createLiveService } from './transit/index.js';
 import { createCacheFromEnv } from './transit/cache.js';
 import { reasonText } from '../../shared/liveStatus.js';
@@ -33,6 +33,7 @@ import { SHARED_ID, idKind } from '../../shared/userId.js';
 import { COARSE_DIGITS, coarseOrigin } from '../../shared/geoPrivacy.js';
 import { createCoordMigration, userCoordStats } from './coords.js';
 import { createRetention } from './retention.js';
+import { createSleep } from './sleep.js';
 
 const clean = (s, n) => String(s ?? '').trim().slice(0, n);
 /** v2.6.0 ?next=구간 번호&at=그 역 도착 예상(분, 0시 기준) — 둘 다 맞는 숫자일 때만(아니면 환승 지하철 실시간 없음) */
@@ -81,6 +82,33 @@ function validClass(c, i) {
   };
 }
 
+// ── v2.8.0 같은 값은 저장하지 않기 · 버전 번호(승인한 설계안 그대로) ──
+//   · 앱을 열 때 화면이 받은 시간표를 그대로 다시 보내도(예전 화면) 저장하지 않음 → '보낸 알림' 기록이 지워지지 않아 같은 출발 알림이 다시 가지 않음
+//   · 화면이 받은 버전(baseRev)을 보냈는데 그사이 다른 화면이 바꿨으면 저장하지 않고 409 { kind: 'stale' } + 지금 값.
+//     baseRev를 안 보내는 예전 화면은 예전처럼 저장(호환) · 내용이 서버와 같으면 버전이 달라도 성공(바꿀 것이 없음)
+/** 시간표가 같은지: 서버가 정리한 모양으로 비교(순서 · 내용). 정리 규칙에 안 맞는 예전 기록이면 다르다고 봄(예전처럼 저장) */
+export function sameClasses(a, b) {
+  try { return JSON.stringify((a || []).map(validClass)) === JSON.stringify((b || []).map(validClass)); } catch { return false; }
+}
+/** 화면이 보낸 버전 번호(0 이상 정수) — 없거나 이상하면 null(확인하지 않음) */
+const baseRevOf = (b) => (Number.isInteger(b?.baseRev) && b.baseRev >= 0 ? b.baseRev : null);
+/** 버전 하나 올리기 */
+const bumpRev = (u, k) => ({ ...revOf(u), [k]: revOf(u)[k] + 1 });
+/** 설정 묶음(정류장 · 설정값 · 캠퍼스 걷는 시간) — PATCH /api/me가 바꾸는 것 */
+const settingsOf = (u) => JSON.parse(JSON.stringify({ stop: u.stop ?? null, prefs: { ...(u.prefs || {}) }, walkOverrides: u.walkOverrides ?? {} }));
+/** PATCH /api/me 본문을 설정 묶음에 적용(예전 규칙 그대로: 범위 자르기 · 정류장은 5자리만) */
+function applyMePatch(s, b) {
+  if (b.stop === null) s.stop = null;
+  else if (b.stop?.arsId) s.stop = { arsId: clean(b.stop.arsId, 10), name: clean(b.stop.name, 40) };
+  const p = b.prefs || {};
+  if (Number.isFinite(p.walkToStopMin)) s.prefs.walkToStopMin = Math.max(0, Math.min(30, p.walkToStopMin));
+  if (Number.isFinite(p.marginMin)) s.prefs.marginMin = Math.max(0, Math.min(30, p.marginMin));
+  if (Number.isFinite(p.notifyBeforeMin)) s.prefs.notifyBeforeMin = Math.max(1, Math.min(60, p.notifyBeforeMin));
+  if (typeof p.notify === 'boolean') s.prefs.notify = p.notify;
+  if (b.walkOverrides && typeof b.walkOverrides === 'object') s.walkOverrides = b.walkOverrides;
+  return s;
+}
+
 /**
  * 테스트에서 시계·공급자를 바꿔 끼울 수 있게 앱을 함수로 만듭니다. provider = createLiveService() 또는 createMockProvider()
  * incidents = createAccidentService() — 서울시 돌발정보(없으면 돌발정보 기능 꺼짐)
@@ -92,8 +120,9 @@ function validClass(c, i) {
  * nearKu = createNearKuFinder() — v2.1 경로를 못 찾을 때 출발지 400m 안의 국민대행 정류장(없으면 이 안내 없음)
  * warmer = createOdsayWarmer() — v2.1 밤에 주요 환승역 경로 미리 찾기(상태 표시용, 실행은 스케줄러)
  * deletedHoldMs — v2.2.5 '내 데이터 모두 삭제' 뒤 같은 사용자 번호의 쓰기 요청을 받지 않는 시간(기본 2분)
+ * sleep = createSleep() — v2.8.0 쓰지 않는 기록 쉬기(화면 요청 = 마지막 앱 열기). 없으면 기록하지 않음
  */
-export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, gyeonggi = null, nearKu = null, warmer = null, coords = null, retention = null, deletedHoldMs = 2 * 60_000 }) {
+export function createApp({ store, provider, pusher, now = () => new Date(), scheduler = null, courses = loadCourses(), incidents = null, weather = null, explainer = null, odsay = null, subway = null, gyeonggi = null, nearKu = null, warmer = null, coords = null, retention = null, sleep = null, deletedHoldMs = 2 * 60_000 }) {
   const app = express();
   app.use(express.json({ limit: '200kb' }));
   // 데모용 사용자 식별: X-User-Id 헤더(실서비스는 학교 계정 로그인 등으로 교체)
@@ -105,7 +134,14 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     req.userId = clean(h || 'demo', 64);
     if (h != null && clean(h, 64) === SHARED_ID) { idStats.demoHeader++; idStats.demoHeaderLastAt = now().getTime(); }
     // v2.2.4 마지막 사용 기록: 이 사용자의 화면이 보낸 요청이 끝난 뒤(저장된 사용자만 · 12시간에 한 번) — 헤더 없는 요청(cron · 서비스 워커)은 세지 않음
-    if (h != null && retention) res.on('finish', () => { try { retention.touch(req.userId, now().getTime()); } catch { /* 기록 실패는 응답과 무관 */ } });
+    //   v2.8.0 같은 때 '마지막 앱 열기'(lastOpenAt — 쉬기 판단, 알림 전달 · 수신 확인은 세지 않음)도
+    if (h != null && (retention || sleep)) {
+      res.on('finish', () => {
+        const t = now().getTime();
+        try { retention?.touch(req.userId, t); } catch { /* 기록 실패는 응답과 무관 */ }
+        try { sleep?.markOpen(req.userId, t); } catch { /* 기록 실패는 응답과 무관 */ }
+      });
+    }
     next();
   });
   // 외부 DB(Upstash)에서 사용자 기록을 다 읽기 전에는 /api 요청을 잠깐 기다리게 함(빈 기록으로 덮어쓰지 않게)
@@ -148,7 +184,8 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     });
   });
   app.get('/api/meta', (_req, res) => res.json({ buildings: BUILDINGS, walkTable: WALK_TABLE, defaultWalkMin: DEFAULT_WALK_MIN, gates: GATES }));
-  app.get('/api/me', (req, res) => { const { push, fired, pushLog, handoff, ...u } = store.user(req.userId); res.json({ ...u, pushSubscriptions: push.length }); });
+  // v2.8.0 rev(버전 번호 { timetable, settings })도 실음 — 화면이 저장할 때 baseRev로 돌려보냄
+  app.get('/api/me', (req, res) => { const { push, fired, pushLog, handoff, sleepNotice, ...u } = store.user(req.userId); res.json({ ...u, rev: revOf(u), pushSubscriptions: push.length }); });
   // v2.2.5 '내 데이터 모두 삭제': 이 사용자의 서버 기록 전체(시간표 · 정류장 · 출발지 · 설정 · 알림 구독 · 알림/도착 기록)를 지움.
   //   · 사용자 번호(X-User-Id) 헤더가 있어야 하고, 여러 기기가 같이 쓰던 'demo'는 지우지 않음 · 본문에 확인 문구 { confirm: '삭제' } 필수
   //   · 외부 DB를 다 읽기 전에는 지우지 않음(아직 안 읽은 기록이 남을 수 있어서) · 외부 DB에서도 지워진 뒤에 성공으로 답함
@@ -198,38 +235,45 @@ export function createApp({ store, provider, pusher, now = () => new Date(), sch
     res.json({ ok: true, userId: id, hasData: Boolean(u.stop || u.classes.length) });
   });
 
+  // 시간표 저장. v2.8.0 같은 시간표면 저장하지 않음('보낸 알림' 기록 그대로) · 받은 버전이 다르면 409 · 실제로 바뀌면 알림 기록을 처음부터 + 버전 +1
   app.put('/api/me/timetable', (req, res) => {
-    try {
-      const classes = (req.body?.classes || []).map(validClass);
-      store.update(req.userId, (u) => { u.classes = classes; u.fired = {}; });
-      res.json({ ok: true, count: classes.length });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    let classes;
+    try { classes = (req.body?.classes || []).map(validClass); } catch (e) { return res.status(400).json({ error: e.message }); }
+    const u = store.user(req.userId), rev = revOf(u);
+    if (sameClasses(u.classes, classes)) return res.json({ ok: true, count: classes.length, unchanged: true, rev });
+    const base = baseRevOf(req.body);
+    if (base !== null && base !== rev.timetable) {
+      return res.status(409).json({ error: '다른 기기에서 시간표가 바뀌었어요', kind: 'stale', section: 'timetable', rev, classes: u.classes });
+    }
+    store.update(req.userId, (x) => { x.classes = classes; x.fired = {}; x.rev = bumpRev(x, 'timetable'); });
+    res.json({ ok: true, count: classes.length, rev: revOf(store.user(req.userId)) });
   });
   app.post('/api/me/timetable/import-text', (req, res) => {
     const parsed = parseTimetableText(clean(req.body?.text, 5000));
     const ok = parsed.filter((e) => e.ok).map((e, i) => validClass(e, i));
-    if (req.body?.apply) store.update(req.userId, (u) => { u.classes = req.body.replace ? ok : [...u.classes, ...ok]; u.fired = {}; });
+    if (req.body?.apply) {
+      const u = store.user(req.userId), next = req.body.replace ? ok : [...u.classes, ...ok];
+      if (!sameClasses(u.classes, next)) store.update(req.userId, (x) => { x.classes = next; x.fired = {}; x.rev = bumpRev(x, 'timetable'); });
+    }
     res.json({ parsed, applied: Boolean(req.body?.apply), count: ok.length });
   });
-  // 탑승 정류장·출발 계산 설정(v0.4 화면)
+  // 탑승 정류장·출발 계산 설정(v0.4 화면). v2.8.0 바뀌는 것이 없으면 저장하지 않음 · 받은 버전이 다르면 409 · 바뀌면 버전 +1
   app.patch('/api/me', (req, res) => {
     const b = req.body || {};
     if (b.stop && !ARS_ID.test(clean(b.stop.arsId, 10))) return res.status(400).json({ error: '정류장 번호(arsId)는 숫자 5자리예요' });
-    store.update(req.userId, (u) => {
-      if (b.stop === null) u.stop = null;
-      else if (b.stop?.arsId) {
-        const next = { arsId: clean(b.stop.arsId, 10), name: clean(b.stop.name, 40) };
-        if (next.arsId !== u.stop?.arsId) u.fired = {};
-        u.stop = next;
-      }
-      const p = b.prefs || {};
-      if (Number.isFinite(p.walkToStopMin)) u.prefs.walkToStopMin = Math.max(0, Math.min(30, p.walkToStopMin));
-      if (Number.isFinite(p.marginMin)) u.prefs.marginMin = Math.max(0, Math.min(30, p.marginMin));
-      if (Number.isFinite(p.notifyBeforeMin)) u.prefs.notifyBeforeMin = Math.max(1, Math.min(60, p.notifyBeforeMin));
-      if (typeof p.notify === 'boolean') u.prefs.notify = p.notify;
-      if (b.walkOverrides && typeof b.walkOverrides === 'object') u.walkOverrides = b.walkOverrides;
+    const u = store.user(req.userId), rev = revOf(u), before = settingsOf(u);
+    const next = applyMePatch(settingsOf(u), b);
+    if (JSON.stringify(next) === JSON.stringify(before)) return res.json({ ok: true, unchanged: true, rev });
+    const base = baseRevOf(b);
+    if (base !== null && base !== rev.settings) {
+      return res.status(409).json({ error: '다른 기기에서 설정이 바뀌었어요', kind: 'stale', section: 'settings', rev, ...before });
+    }
+    store.update(req.userId, (x) => {
+      if (b.stop?.arsId && next.stop?.arsId !== x.stop?.arsId) x.fired = {}; // 정류장이 바뀌면 알림 기록을 처음부터(예전 규칙)
+      x.stop = next.stop; x.prefs = next.prefs; x.walkOverrides = next.walkOverrides;
+      x.rev = bumpRev(x, 'settings');
     });
-    res.json({ ok: true });
+    res.json({ ok: true, rev: revOf(store.user(req.userId)) });
   });
 
   // ── '도착했어요!': 오늘 첫 수업 도착 기록 → 내 걸음 반영(EMA, shared/arrival.js) — 같은 날 같은 수업은 한 번만 ──
@@ -575,15 +619,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   // v2.2.4 마지막 사용 후 90일(RETENTION_DAYS) 지난 사용자 기록 자동 삭제 — 처음 켜질 때 기존 사용자는 지금을 기산점으로(바로 지워지지 않음)
   const retention = createRetention({ store, env, clock: () => now().getTime() });
   retention.start();
-  const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label', subway, gyeonggi, warmer });
+  // v2.8.0 쓰지 않는 기록 쉬기: 앱을 SCHEDULER_SLEEP_DAYS(7)일 동안 열지 않으면 스케줄러가 계산하지 않음 — 시작점은 외부 DB 키 하나(처음 한 번)
+  const sleep = createSleep({ store, env, kv, clock: () => now().getTime() });
+  const scheduler = createScheduler({ store, provider, pusher, now, pushWhenMock: env.PUSH_WHEN_MOCK === 'skip' ? 'skip' : 'label', subway, gyeonggi, warmer, sleep });
   const courses = loadCourses(env.COURSES_FILE || undefined);
   const incidents = createAccidentService({ env, clock: () => now().getTime() });
   const weather = createWeatherService({ env, clock: () => now().getTime() });
   const explainer = createExplainService({ env, clock: () => now().getTime() });
-  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway, gyeonggi, nearKu, warmer, coords, retention });
+  const app = createApp({ store, provider, pusher, now, scheduler, courses, incidents, weather, explainer, odsay, subway, gyeonggi, nearKu, warmer, coords, retention, sleep });
   const port = Number(env.PORT) || 8787;
   const h = provider.health(), ih = incidents.health(), wh = weather.health(), eh = explainer.health(), si = store.info();
-  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건 · 미리 찾기 ${warmer.health().list}곳 ${warmer.health().hours})` : 'ODSAY_API_KEY 없음 → 근처 국민대행 정류장 안내'}, 실시간 지하철: ${subway.keyConfigured ? `서울시(허용 노선 ${subway.health().lines.on}개${subway.offLines.size ? ` · 끈 노선 ${[...subway.offLines].join(',')}` : ''})` : '키 없음 → 표준 대기'}, 경기도 버스: ${gyeonggi.keyConfigured ? '키 있음(G2 · 경기도 정류장 첫 버스 · 출발 30분 전부터)' : '키 없음 → 꺼짐'}, 환승 버스: 서울시 하루 ${provider.midCap}회 · 경기도 하루 ${gyeonggi.midCap}회(보호선 서울시 정류장 조회 ${SEOUL_BUS_MID_GUARD}회), 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
+  app.listen(port, () => console.log(`KU BUS AI 서버 http://localhost:${port} (실시간: ${h.keyConfigured ? '서울시 API' : '키 없음 → 예시 데이터'}, 캐시: ${h.cache} ${h.cacheSec}초, 돌발정보: ${ih.keyConfigured ? `서울시 ${ih.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, 날씨: ${wh.keyConfigured ? `기상청 격자 ${wh.grid.nx},${wh.grid.ny} · ${wh.cacheSec / 60}분마다` : '키 없음 → 꺼짐'}, AI 설명: ${eh.keyConfigured ? `Gemini ${eh.model}` : '키 없음 → 기본 안내'}, 저장소: ${si.kind === 'upstash' ? `Upstash(${si.loaded ? `사용자 ${si.users}명` : '읽기 실패 → 다시 시도 중'})` : '임시 파일(재시작하면 지워짐)'}, 환승 경로: ${odsay.keyConfigured ? `ODsay(하루 ${odsay.health().cap}건 · 미리 찾기 ${warmer.health().list}곳 ${warmer.health().hours})` : 'ODSAY_API_KEY 없음 → 근처 국민대행 정류장 안내'}, 실시간 지하철: ${subway.keyConfigured ? `서울시(허용 노선 ${subway.health().lines.on}개${subway.offLines.size ? ` · 끈 노선 ${[...subway.offLines].join(',')}` : ''})` : '키 없음 → 표준 대기'}, 경기도 버스: ${gyeonggi.keyConfigured ? '키 있음(G2 · 경기도 정류장 첫 버스 · 출발 30분 전부터)' : '키 없음 → 꺼짐'}, 환승 버스: 서울시 하루 ${provider.midCap}회 · 경기도 하루 ${gyeonggi.midCap}회(보호선 서울시 정류장 조회 ${SEOUL_BUS_MID_GUARD}회), 알림 쉬기: ${sleep.days ? `앱을 ${sleep.days}일 동안 열지 않으면(알림 구독 없음 · 알림 꺼짐은 늘 건너뜀)` : '끔(알림 구독 없음 · 알림 꺼짐만 건너뜀)'}, 푸시: ${pusher.enabled ? '켜짐' : pusher.configError ? 'VAPID 설정 오류' : '꺼짐'}, 강의 목록: ${courses.meta.available ? `${courses.meta.count}개` : '없음'})`));
   scheduler.start();
   // Render가 서버를 멈출 때(잠들기 · 재배포) 아직 저장 안 된 기록을 마저 저장
   const bye = () => { scheduler.stop(); coords.stop(); retention.stop(); store.flush().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };

@@ -28,6 +28,8 @@ export function fakeUpstashFetch({ token = 'UPSTASH-TEST-TOKEN', data = {}, fail
       case 'GET': return { result: str(key)?.$s ?? null };
       case 'SET': {
         if (readonly) return write();
+        // v2.8.0 NX: 이미 있으면 저장하지 않고 null(Upstash · Redis와 같음)
+        if (rest.some((x) => String(x).toUpperCase() === 'NX') && str(key)) return { result: null };
         const ex = rest.findIndex((x) => String(x).toUpperCase() === 'EX');
         db[key] = { $s: String(rest[0]), $exp: ex >= 0 ? clock() + Number(rest[ex + 1]) * 1000 : 0 };
         return { result: 'OK' };

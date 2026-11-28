@@ -5,6 +5,7 @@
 // v2.5.0: 8801에 첫 버스가 경기도 정류장(가짜 수원역)인 저장 경로를 가진 e2e 사용자 둘(G2 경기도 첫 버스 실시간 · 출발 30분 전부터)
 // v2.6.0: 8801에 07:40 '출발했어요!'를 누른 e2e 사용자 하나(예시 경로 2호선 → 4호선 → 171) — 서버 시계 08:10부터 4호선이 다음 탈 환승 지하철
 // v2.7.0: 8801에 07:40 '출발했어요!'를 누른 e2e 사용자 둘(2호선 → 환승 버스 → 171) — 환승 버스가 가짜 서울시 정류장(08920 150) · 가짜 경기도 정류장(수원역 7770)
+// v2.8.0: 8801에 스케줄러(저절로 돌지 않음 — e2e가 POST /__e2e/tick으로 1분을 한 번씩 돌림)와 쉬기(sleep) — 중복 출발 알림 · 알림 쉬기 줄 확인용
 // v2.1: 두 서버 모두 '근처 국민대행 정류장 찾기'(nearKu) — 8801은 가짜 서울시 정류소정보(정릉시장 08901), 8802는 키 없음(지어내지 않음)
 // 실행: node scripts/e2eServer.js   (frontend/dist가 먼저 빌드되어 있어야 함)
 import webpush from 'web-push';
@@ -36,6 +37,8 @@ import { ODSAY_TEST_KEY, fakeOdsayFetch } from '../test/fixtures/odsayFixture.js
 import { SUBWAY_TEST_KEY, fakeSubwayFetch } from '../test/fixtures/subwayFixture.js';
 import { createGyeonggiBusService } from '../src/transit/gyeonggiBus.js';
 import { GG_TEST_KEY, fakeGyeonggiFetch } from '../test/fixtures/gyeonggiFixture.js';
+import { createScheduler } from '../src/scheduler.js';
+import { createSleep } from '../src/sleep.js';
 
 const base = new Date('2026-11-08T23:10:00Z').getTime(), t0 = Date.now(); // 서울 월 08:10부터 흐르는 시계
 const now = () => new Date(base + (Date.now() - t0));
@@ -111,8 +114,14 @@ coords.start();
 // v2.2.4 보관 기간(마지막 사용 후 90일 자동 삭제) — e2e 시계로는 90일이 지나지 않아 지워지는 사람은 없음
 const retention = createRetention({ store: store8801, env: {}, clock: () => now().getTime(), log: quiet });
 retention.start();
-createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, odsay, subway, gyeonggi, nearKu, coords, retention, pusher: createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice }) })
-  .listen(8801, () => console.log('fixture seoul server 8801'));
+// v2.8.0 쉬기(시작점 = e2e 서버가 켜진 때 → e2e 동안은 아무도 안 쉼) · 스케줄러(저절로 돌지 않음)
+const pusher8801 = createPusher({ VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey }, quiet, { sendImpl: fakeDevice });
+const sleep = createSleep({ store: store8801, env: {}, kv: createKv({ clock: () => now().getTime() }), clock: () => now().getTime(), log: quiet });
+const scheduler = createScheduler({ store: store8801, provider: live, pusher: pusher8801, now, subway, gyeonggi, sleep, log: quiet });
+const app8801 = createApp({ store: store8801, provider: live, now, courses, incidents, weather, explainer, odsay, subway, gyeonggi, nearKu, coords, retention, sleep, scheduler, pusher: pusher8801 });
+// e2e 전용: 스케줄러 1분을 한 번 돌리고 이번에 보낸 출발 알림(사용자 번호 · 종류)만 돌려줌 — 실서비스 서버에는 없음
+app8801.post('/__e2e/tick', async (_req, res) => { const sent = await scheduler.tick(); res.json({ sent: sent.map((x) => ({ userId: x.userId, types: x.types, title: x.title })), users: scheduler.status().users }); });
+app8801.listen(8801, () => console.log('fixture seoul server 8801'));
 const nokey = createLiveService({ env: {}, background: false, log: quiet });
 createApp({ store: createStore(null), provider: nokey, now, pusher: createPusher({}, quiet), nearKu: createNearKuFinder({ provider: nokey, clock: () => now().getTime() }), incidents: createAccidentService({ env: {}, clock: () => now().getTime() }), weather: createWeatherService({ env: {}, clock: () => now().getTime() }), explainer: createExplainService({ env: {}, clock: () => now().getTime() }) })
   .listen(8802, () => console.log('no-key server 8802'));

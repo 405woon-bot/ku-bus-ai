@@ -4,7 +4,7 @@ import { createUpstash, pairsToObject } from '../upstash.js';
 
 /**
  * @param {{ upstash?: ReturnType<typeof createUpstash>|null, clock?: () => number }} o
- * @returns {{ kind, get(k), set(k, v, ttlSec?), expire(k, ttlSec), incr(k, ttlSec), getNum(k), hgetall(k), hset(k, f, v), hdel(k, f) }}
+ * @returns {{ kind, get(k), set(k, v, ttlSec?), setnx(k, v), expire(k, ttlSec), incr(k, ttlSec), getNum(k), hgetall(k), hset(k, f, v), hdel(k, f) }}
  */
 export function createKv({ upstash = null, clock = () => Date.now() } = {}) {
   if (upstash?.configured) {
@@ -12,6 +12,8 @@ export function createKv({ upstash = null, clock = () => Date.now() } = {}) {
       kind: 'upstash',
       async get(k) { return (await upstash.cmd('GET', k)) ?? null; },
       async set(k, v, ttlSec) { await upstash.cmd('SET', k, v, ...(ttlSec ? ['EX', ttlSec] : [])); },
+      /** v2.8.0 없을 때만 저장(SET NX) — 저장했으면 true(쉬기 시작점처럼 처음 한 번만 정하는 값) */
+      async setnx(k, v) { return (await upstash.cmd('SET', k, v, 'NX')) === 'OK'; },
       /** 남은 보관 시간 바꾸기(v2.1: 예전 검색 결과를 90일까지 남김) */
       async expire(k, ttlSec) { return Number(await upstash.cmd('EXPIRE', k, ttlSec)) || 0; },
       /** 1 늘리고 새 값(만료 시간도 새로) */
@@ -29,6 +31,7 @@ export function createKv({ upstash = null, clock = () => Date.now() } = {}) {
     kind: 'memory',
     async get(k) { return live(k)?.v ?? null; },
     async set(k, v, ttlSec) { m.set(k, { v: String(v), exp: exp(ttlSec) }); },
+    async setnx(k, v) { if (live(k)) return false; m.set(k, { v: String(v), exp: 0 }); return true; },
     async expire(k, ttlSec) { const e = live(k); if (!e) return 0; e.exp = exp(ttlSec); return 1; },
     async incr(k, ttlSec) { const n = (Number(live(k)?.v) || 0) + 1; m.set(k, { v: String(n), exp: exp(ttlSec) }); return n; },
     async getNum(k) { return Number(live(k)?.v) || 0; },

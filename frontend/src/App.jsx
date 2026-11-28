@@ -158,6 +158,9 @@ export default function App({ handoff = null, deleted = false }) {
   // 홈 화면 앱이 처음 열려 설정을 이어받았으면 잠깐 알림
   const [handoffToast, setHandoffToast] = useState(Boolean(handoff?.claimed));
   useEffect(() => { if (!handoffToast) return undefined; const t = setTimeout(() => setHandoffToast(false), 6000); return () => clearTimeout(t); }, [handoffToast]);
+  // v2.8.0 저장이 겹쳐 다른 기기에서 바꾼 내용을 불러왔으면 잠깐 안내(8초)
+  const [staleToast, setStaleToast] = useState(false);
+  useEffect(() => { if (!sync.staleAt) return undefined; setStaleToast(true); const t = setTimeout(() => setStaleToast(false), 8000); return () => clearTimeout(t); }, [sync.staleAt]);
   // v2.2.5 '내 데이터 모두 삭제' 뒤 처음 화면: 맨 위 완료 안내(12초)
   const [deletedNote, setDeletedNote] = useState(Boolean(deleted));
   useEffect(() => { if (!deletedNote) return undefined; const t = setTimeout(() => setDeletedNote(false), 12000); return () => clearTimeout(t); }, [deletedNote]);
@@ -206,6 +209,14 @@ export default function App({ handoff = null, deleted = false }) {
           <p className="flex items-center gap-2 rounded-2xl bg-[#13294B] px-3.5 py-2.5 text-[13.5px] font-semibold leading-snug text-white shadow-pop">
             <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#8FE3AE]" aria-hidden="true"><path d="M5 12.5 10 17 19 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
             {handoff?.hasData ? 'Safari에서 쓰던 정류장 · 시간표를 그대로 가져왔어요' : 'Safari에서 쓰던 설정을 이어받았어요'}
+          </p>
+        </div>
+      )}
+      {staleToast && (
+        <div role="status" data-testid="sync-stale-toast" className="gutter fixed inset-x-0 top-[calc(64px+env(safe-area-inset-top,0px))] z-40 mx-auto max-w-[560px]">
+          <p className="flex items-center gap-2 rounded-2xl bg-[#13294B] px-3.5 py-2.5 text-[13.5px] font-semibold leading-snug text-white shadow-pop">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#9CC3FF]" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 11v5.5M12 7.6v.1" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" /></svg>
+            다른 기기에서 바꾼 내용을 불러왔어요. 방금 바꾼 것은 다시 해 주세요.
           </p>
         </div>
       )}

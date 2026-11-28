@@ -157,6 +157,15 @@ function storageStatus(mode, h) {
   return ['warn', '임시 파일 · 재시작하면 지워짐', 'Render에 UPSTASH_REDIS_REST_URL · UPSTASH_REDIS_REST_TOKEN을 넣으면 외부 DB에 저장해요. 지금은 서버가 잠들면 알림 구독이 지워질 수 있어요.'];
 }
 
+/** v2.8.0 설정 › 알림 › '알림 쉬기' 줄: 서버 값(health.scheduler.sleep.days — SCHEDULER_SLEEP_DAYS)을 그대로. 미리보기 · 아직 못 받았으면 기본 7일 */
+export function sleepRow(mode, health) {
+  const v = mode === 'api' ? health?.scheduler?.sleep?.days : undefined;
+  const days = Number.isInteger(v) && v >= 0 ? v : 7;
+  return days > 0
+    ? { days, chip: `${days}일`, level: 'info', desc: `앱을 ${days}일 동안 열지 않으면 서버가 출발 알림 계산을 쉬어요. 쉬기 전에 알림으로 알려 드리고, 앱을 열면 바로 다시 해요.` }
+    : { days, chip: '쉬지 않음', level: 'muted', desc: '앱을 오래 열지 않아도 서버가 출발 알림을 계속 계산해요.' };
+}
+
 /** 분 단위 선택 칩 */
 function MinuteChips({ label, value, options, onChange }) {
   return (
@@ -324,6 +333,7 @@ export default function SettingsScreen({ mode, state, dispatch, onPickStop, perm
       <Group title="알림">
         <Item label="출발 알림" desc="출발 시각 전, 출발이 앞당겨질 때, 지각 위험일 때"><Switch label="출발 알림" checked={prefs.notify} onChange={(v) => setPrefs({ notify: v })} /></Item>
         {prefs.notify && <Item label="출발 몇 분 전에"><MinuteChips label="출발 몇 분 전에 알릴지" value={prefs.notifyBeforeMin} options={[5, 10, 15]} onChange={(m) => setPrefs({ notifyBeforeMin: m })} /></Item>}
+        {(() => { const s = sleepRow(mode, health); return <div data-testid="sleep-row"><Item label="알림 쉬기" desc={s.desc}><Chip level={s.level}>{s.chip}</Chip></Item></div>; })()}
         <Item label="앱을 연 동안 알림" desc={`화면 위에 띄우는 알림 · ${PERM[perm] || perm}`}>
           <div className="flex gap-2">
             {perm === 'default' && <Button size="sm" variant="primary" onClick={onRequestPerm}>허용하기</Button>}

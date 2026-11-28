@@ -42,13 +42,19 @@ export function useTransitLive({ mode, route, now, cls, walkTable, marginMin, pe
   const midRef = useRef(midHint);
   midRef.current = midHint;
   const loadRef = useRef(null);
+  // v2.8.0 가장 나중에 보낸 요청의 답만 씀 — 앱을 열 때 '다음 탈 환승 구간'을 알기 전 요청과 안 뒤 요청이 함께 나가는데,
+  //   앞 요청의 답이 늦게 오면 환승 구간 실시간('환승 버스 실시간' 등)을 지워 다음 갱신(30초)까지 안 보였음
+  const seqRef = useRef(0);
   const [live, setLive] = useState({ status: 'idle', rt: null });
   useEffect(() => {
     if (mode !== 'api' || !route) { setLive({ status: 'idle', rt: null }); return undefined; }
     let alive = true;
     setLive((l) => ({ ...l, status: l.rt ? l.status : 'loading' }));
-    const load = () => api.transitLive(midRef.current).then((j) => { if (alive) setLive({ status: 'ok', rt: j, at: Date.now() }); })
-      .catch((e) => { if (alive) setLive((l) => ({ ...l, status: l.rt ? 'stale' : 'error', error: e.message })); });
+    const load = () => {
+      const n = ++seqRef.current;
+      return api.transitLive(midRef.current).then((j) => { if (alive && n === seqRef.current) setLive({ status: 'ok', rt: j, at: Date.now() }); })
+        .catch((e) => { if (alive && n === seqRef.current) setLive((l) => ({ ...l, status: l.rt ? 'stale' : 'error', error: e.message })); });
+    };
     loadRef.current = load;
     load();
     const id = setInterval(load, REFRESH_MS);

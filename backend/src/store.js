@@ -53,8 +53,17 @@ export const defaultUser = () => ({
   departure: null,
   // v2.2.4 마지막 사용 시각(ms) — 화면 요청(12시간에 한 번) · 출발 알림 전달 · 알림 수신 확인. 이 시각부터 90일 지나면 자동 삭제(retention.js)
   lastSeen: null,
+  // v2.8.0 마지막으로 앱 화면을 연 시각(ms, 12시간에 한 번) — 알림 전달 · 수신 확인은 세지 않음. 쉬기 판단에만 씀(sleep.js)
+  lastOpenAt: null,
+  // v2.8.0 쉬기 안내 알림을 보낸 기록 { at, sent } — 다시 열 때까지 한 번만
+  sleepNotice: null,
+  // v2.8.0 버전 번호: 시간표 · 설정(정류장 · 설정값 · 걷는 시간)이 실제로 바뀔 때마다 1씩 — 저장할 때 화면이 받은 번호와 다르면 저장하지 않음(409)
+  rev: { timetable: 0, settings: 0 },
   updatedAt: 0,
 });
+
+/** v2.8.0 버전 번호(예전 기록은 0) */
+export const revOf = (u) => ({ timetable: Number(u?.rev?.timetable) || 0, settings: Number(u?.rev?.settings) || 0 });
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 /**

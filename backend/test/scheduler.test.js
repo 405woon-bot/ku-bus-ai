@@ -11,7 +11,8 @@ const quiet = { warn() {}, info() {}, error() {} };
 
 function setup({ provider, pushWhenMock = 'label' }) {
   const store = createStore(null);
-  store.update('demo', (u) => { u.classes = [CLASS]; u.stop = { arsId: '08901', name: '정릉시장' }; });
+  // v2.8.0 스케줄러는 알림 구독이 있는 기록만 계산(구독이 없으면 보낼 곳이 없어 건너뜀) → 시험 사용자도 구독 하나(가짜 주소)
+  store.update('demo', (u) => { u.classes = [CLASS]; u.stop = { arsId: '08901', name: '정릉시장' }; u.push = [{ endpoint: 'https://push.example.invalid/sched', keys: { p256dh: 'k', auth: 'a' } }]; });
   const pushes = [];
   const pusher = { enabled: true, deliver: async (_s, p) => { pushes.push(p); return { results: [] }; } };
   let t = new Date('2026-11-08T23:10:00Z');

@@ -383,6 +383,14 @@ with sync_playwright() as p:
         pg.evaluate("location.hash = '#settings'"); pg.get_by_text('데이터 · 서버 연결').wait_for(timeout=5000)
         srow = flat(pg.get_by_text('실시간 데이터', exact=True).first.locator('xpath=../..').inner_text())
         check(f"[{label}] v2.7.0 설정 '실시간 데이터': 출발했어요! 뒤 환승 지하철 · 버스 15분 전부터 · 서울시 정류장 환승 버스 하루 100회", '(서울시 정류장 환승 버스는 하루 100회까지)' in srow, srow[:200])
+        # v2.8.0 설정 › 알림 › 알림 쉬기(미리보기는 서버가 없어 기본 7일) · 줄 넘침 없음
+        slr = pg.get_by_test_id('sleep-row')
+        sl = flat(slr.inner_text())
+        check(f"[{label}] v2.8.0 설정 › 알림 › 알림 쉬기: 7일 · 앱을 7일 동안 열지 않으면 서버가 출발 알림 계산을 쉬어요 · 쉬기 전에 알림 · 앱을 열면 바로 다시",
+              sl == '알림 쉬기 앱을 7일 동안 열지 않으면 서버가 출발 알림 계산을 쉬어요. 쉬기 전에 알림으로 알려 드리고, 앱을 열면 바로 다시 해요. 7일', sl)
+        box = slr.bounding_box(); vw = pg.evaluate('document.documentElement.clientWidth')
+        check(f'[{label}] v2.8.0 알림 쉬기 줄 가로 넘침 없음', box is not None and box['x'] >= 0 and box['x'] + box['width'] <= vw + 1, str(box))
+        if label == 'iphone13': slr.screenshot(path=OUT + f'preview_{label}_sleep_row.png')
         pg.evaluate("location.hash = '#home'"); pg.wait_for_timeout(300)
         pg.get_by_test_id('depart-undo').click(); pg.get_by_test_id('depart-undo-yes').click(); pg.wait_for_timeout(400)
         check(f'[{label}] v2.7.0 [잘못 눌렀어요] → 출발 기록 지움', pg.get_by_test_id('depart-next').count() == 0)

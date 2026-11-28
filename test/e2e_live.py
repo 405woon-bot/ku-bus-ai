@@ -913,6 +913,82 @@ with sync_playwright() as p:
     check('[v2.5.1] health gyeonggiBus.judgePath: 주변 정류소로 1 · 이름 검색 0 · 주변 실패 0 · lastError 없음 · 확인 도구 selfJudge path around · checks.around.status ok',
           hg3['judgePath'] == {'around': 1, 'keyword': 0, 'aroundFailed': 0} and hg3['lastError'] is None and g11['selfJudge']['path'] == 'around'
           and g11['checks']['around']['status'] == 'ok', json.dumps({'judgePath': hg3.get('judgePath'), 'lastError': hg3.get('lastError'), 'self': g11.get('selfJudge')}, ensure_ascii=False)[:300])
+
+    # ⑯ v2.8.0(승인한 설계안): 중복 출발 알림 막기 · 같은 값은 다시 저장하지 않음 · 저장 충돌(버전 번호) 안내 · 앱으로 돌아오면 새 값 · 알림 쉬기 줄 ·
+    #    알림 구독 없는 기록 건너뛰기. 8801 스케줄러는 저절로 돌지 않아 e2e가 POST /__e2e/tick으로 1분씩 돌림(예시 데이터)
+    dup = f'e2edup{int(time.time())}'
+    cdup = context(b, p, 8801, dup, viewport={'width': 1280, 'height': 900})
+    sd = datetime.datetime.fromisoformat(api(cdup, 8801, dup, 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    cm = (sd.hour * 60 + sd.minute + 25 + 4) // 5 * 5  # 서버 시계 25분쯤 뒤 수업 → 지금 출발 알림 시각
+    api(cdup, 8801, dup, 'PUT', '/api/me/timetable', {'classes': [{**CLASS, 'id': 'dupc1', 'start': hhmm(cm), 'end': hhmm(cm + 75)}]})
+    api(cdup, 8801, dup, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
+    api(cdup, 8801, dup, 'POST', '/api/push/subscribe', {'subscription': {'endpoint': 'https://push.example.invalid/e2e-dup', 'keys': {'p256dh': 'BOrE2Ep256dhKey', 'auth': 'e2eAuth'}}, 'device': 'PC'})
+    mine = lambda t: [x for x in t['sent'] if x['userId'] == dup]
+    t1 = api(cdup, 8801, dup, 'POST', '/__e2e/tick')
+    check('[v2.8.0] 스케줄러: 출발 알림 시각이 된 구독 사용자에게 출발 알림 한 번', len(mine(t1)) == 1 and 'depart' in mine(t1)[0]['types'], json.dumps(mine(t1), ensure_ascii=False))
+    pgd = cdup.new_page(); errs = []; writes = []
+    pgd.on('pageerror', lambda e: errs.append(str(e)))
+    pgd.on('request', lambda r: writes.append(f'{r.method} {r.url.split("8801")[1]}') if r.method in ('PUT', 'PATCH') else None)
+    pgd.clock.install(time=sd); pgd.goto('http://localhost:8801/')
+    pgd.wait_for_timeout(2500)
+    check('[v2.8.0] 앱을 열기만 하면 시간표 · 설정을 다시 저장하지 않음(PUT · PATCH 없음 — v2.7.0까지는 열 때마다 다시 저장)', writes == [] and not errs, f'{writes} {errs}')
+    pgd.get_by_role('link', name='설정').first.click()
+    pgd.get_by_test_id('sleep-row').wait_for(timeout=5000)
+    srow = flat(pgd.get_by_test_id('sleep-row').inner_text())
+    check('[v2.8.0] 설정 › 알림 › 알림 쉬기: 7일(서버 값) · 앱을 7일 동안 열지 않으면 … 앱을 열면 바로 다시 해요',
+          srow == '알림 쉬기 앱을 7일 동안 열지 않으면 서버가 출발 알림 계산을 쉬어요. 쉬기 전에 알림으로 알려 드리고, 앱을 열면 바로 다시 해요. 7일', srow)
+    pgd.close()
+    me = api(cdup, 8801, dup, 'GET', '/api/me')
+    echo = api(cdup, 8801, dup, 'PUT', '/api/me/timetable', {'classes': me['classes']})  # 예전 화면(캐시된 옛 앱)처럼 baseRev 없이 그대로
+    t2 = api(cdup, 8801, dup, 'POST', '/__e2e/tick')
+    check('[v2.8.0] 중복 출발 알림 막기: 예전 화면처럼 같은 시간표를 다시 보내도 저장하지 않음(unchanged) → 다음 1분에 같은 출발 알림 없음',
+          echo.get('unchanged') is True and mine(t2) == [], json.dumps([echo, mine(t2)], ensure_ascii=False)[:300])
+    chg = api(cdup, 8801, dup, 'PUT', '/api/me/timetable', {'classes': me['classes'] + [{**CLASS, 'id': 'dupc2', 'day': 2}], 'baseRev': me['rev']['timetable']})
+    t3 = api(cdup, 8801, dup, 'POST', '/__e2e/tick')
+    check('[v2.8.0] 시간표가 실제로 바뀌면 예전처럼 알림 기록을 처음부터(버전 +1) → 오늘 출발 알림을 다시 계산',
+          chg.get('rev', {}).get('timetable') == me['rev']['timetable'] + 1 and len(mine(t3)) == 1 and 'depart' in mine(t3)[0]['types'], json.dumps([chg, mine(t3)], ensure_ascii=False)[:300])
+    hs = api(cdup, 8801, 'x', 'GET', '/api/health')['scheduler']
+    check('[v2.8.0] /api/health scheduler.users(전체 · 계산 · 알림 구독 없음 · 알림 꺼짐 · 쉼) · sleep(7일 · 켜짐 · 시작점) — 개수만',
+          hs['users']['noPush'] >= 3 and hs['users']['planned'] >= 1 and hs['users']['asleep'] == 0 and hs['users']['total'] == hs['users']['planned'] + hs['users']['noPush'] + hs['users']['notifyOff'] + hs['users']['asleep']
+          and hs['sleep']['days'] == 7 and hs['sleep']['on'] is True and bool(hs['sleep']['since']) and dup not in json.dumps(hs), json.dumps(hs, ensure_ascii=False)[:300])
+    cdup.close()
+    # 저장 충돌: 같은 사용자 번호를 쓰는 두 화면(아이폰 Safari · 홈 화면 앱처럼) — B가 먼저 저장 → 오래 열어 둔 A의 저장은 409 → A는 서버 값으로 바꾸고 안내
+    stu = f'e2est{int(time.time())}'
+    ca = context(b, p, 8801, stu, **p.devices['iPhone 13']); cbb = context(b, p, 8801, stu, **p.devices['iPhone 13'])
+    api(ca, 8801, stu, 'PUT', '/api/me/timetable', {'classes': [CLASS]})
+    api(ca, 8801, stu, 'PATCH', '/api/me', {'stop': {'arsId': '08901', 'name': '정릉시장'}})
+    st0 = datetime.datetime.fromisoformat(api(ca, 8801, stu, 'GET', '/api/wake')['now'].replace('Z', '+00:00')).astimezone(KST)
+    pa = ca.new_page(); pb = cbb.new_page(); errs = []
+    for pgx in (pa, pb):
+        pgx.on('pageerror', lambda e: errs.append(str(e)))
+        pgx.clock.install(time=st0); pgx.goto('http://localhost:8801/#settings')
+        pgx.get_by_role('radiogroup', name='수업 시작 전 여유').wait_for(timeout=10000)
+    pa.wait_for_timeout(800); pb.wait_for_timeout(300)
+    margin = lambda pgx, m: pgx.get_by_role('radiogroup', name='수업 시작 전 여유').get_by_role('radio', name=f'{m}분', exact=True)
+    notify = lambda pgx, m: pgx.get_by_role('radiogroup', name='출발 몇 분 전에 알릴지').get_by_role('radio', name=f'{m}분', exact=True)
+    with pb.expect_response(lambda r: r.request.method == 'PATCH' and r.url.endswith('/api/me')) as rb:
+        margin(pb, 10).click()
+    with pa.expect_response(lambda r: r.request.method == 'PATCH' and r.url.endswith('/api/me')) as ra:
+        notify(pa, 15).click()
+    toast = pa.get_by_test_id('sync-stale-toast'); toast.wait_for(timeout=5000)
+    pa.wait_for_timeout(300)
+    srv = api(ca, 8801, stu, 'GET', '/api/me')
+    check('[v2.8.0] 저장 충돌: 먼저 저장한 화면은 200 · 오래 열어 둔 화면의 저장은 409 → 서버의 지금 값(여유 10분 · 알림 10분 전)으로 바꾸고 안내 · 다른 화면의 새 변경을 덮어쓰지 않음',
+          rb.value.status == 200 and ra.value.status == 409 and flat(toast.inner_text()) == '다른 기기에서 바꾼 내용을 불러왔어요. 방금 바꾼 것은 다시 해 주세요.'
+          and margin(pa, 10).get_attribute('aria-checked') == 'true' and notify(pa, 10).get_attribute('aria-checked') == 'true'
+          and srv['prefs']['marginMin'] == 10 and srv['prefs']['notifyBeforeMin'] == 10 and not errs, f"{rb.value.status} {ra.value.status} {srv['prefs']} {errs}")
+    # 앱으로 돌아오면(1분 넘게 지난 뒤) 다른 화면에서 바꾼 값을 받아 옴 — 안내 없이 그대로 보여 줌
+    with pb.expect_response(lambda r: r.request.method == 'PATCH' and r.url.endswith('/api/me')) as rb2:
+        notify(pb, 5).click()
+    pa_writes = []
+    pa.on('request', lambda r: pa_writes.append(f'{r.method} {r.url.split("8801")[1]}') if r.method in ('PUT', 'PATCH') else None)
+    pa.clock.fast_forward(61_000)
+    pa.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    pa.wait_for_function("() => document.querySelector('[role=radiogroup][aria-label=\"출발 몇 분 전에 알릴지\"] [aria-checked=\"true\"]')?.innerText === '5분'", timeout=8000)
+    pa.wait_for_timeout(1200)  # 받은 뒤 저장이 나가는지 볼 시간(설정 0.4초 · 시간표 0.6초 뒤 저장)
+    check('[v2.8.0] 앱으로 돌아오면(1분 넘게 지난 뒤) 다른 화면에서 바꾼 설정(알림 5분 전)을 받아 옴 · 쓰기 없이',
+          rb2.value.status == 200 and notify(pa, 5).get_attribute('aria-checked') == 'true' and margin(pa, 10).get_attribute('aria-checked') == 'true' and pa_writes == [] and not errs, f'{rb2.value.status} {pa_writes} {errs}')
+    ca.close(); cbb.close()
     b.close()
 
 print('\n'.join(res)); n = sum(r.startswith('FAIL') for r in res)

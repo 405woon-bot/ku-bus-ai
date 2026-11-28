@@ -50,8 +50,9 @@ export const api = {
   searchCourses: (q) => req('GET', `/api/courses?q=${encodeURIComponent(q)}`),
   coursesMeta: () => req('GET', '/api/courses/meta'),
   me: () => req('GET', '/api/me'),
-  saveMe: (patch) => req('PATCH', '/api/me', patch),
-  saveTimetable: (classes) => req('PUT', '/api/me/timetable', { classes }),
+  // v2.8.0 baseRev: 화면이 받은 버전 번호 — 그사이 다른 기기가 바꿨으면 서버가 409 { kind: 'stale' }로 지금 값을 줌(없으면 예전처럼 저장)
+  saveMe: (patch, baseRev) => req('PATCH', '/api/me', { ...patch, ...(Number.isInteger(baseRev) ? { baseRev } : {}) }),
+  saveTimetable: (classes, baseRev) => req('PUT', '/api/me/timetable', { classes, ...(Number.isInteger(baseRev) ? { baseRev } : {}) }),
   // 백그라운드 알림(Web Push)
   pushKey: () => req('GET', '/api/push/key'),
   pushSubscribe: (body) => req('POST', '/api/push/subscribe', body),
